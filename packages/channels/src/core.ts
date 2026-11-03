@@ -11,12 +11,14 @@ import { type BindTarget, bindAddress, EXTENSION } from "./bind";
 import { replyHook } from "./hook";
 import { type ChannelsHub, createHub } from "./hub";
 import { defineSendTask } from "./send";
+import { defineChannelTools } from "./tools";
 import type { ChannelRegistration, ChannelsOptions } from "./types";
 
 const DEFAULT_RETRY = { attempts: 5, baseDelayMs: 1000 };
 
 export type Channels = {
   extension: Extension;
+  tools: Extension;
   bind(
     tx: Tx,
     target: BindTarget,
@@ -45,6 +47,7 @@ export function createChannels(options: ChannelsOptions): Channels {
       tasks: [Send],
       hooks: [hook(GenerationTask, { afterRun: replyHook(Send) })],
     }),
+    tools: defineChannelTools(Send),
     bind: async (tx, target, conversationId) => {
       registration(target.channel);
       await bindAddress(tx, target, conversationId);

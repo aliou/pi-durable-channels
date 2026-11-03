@@ -192,6 +192,7 @@ export function setup(options: SetupOptions = {}) {
   models.setProvider(faux.provider);
   const registry = createRegistry();
   registry.install(channels.extension);
+  registry.install(channels.tools);
   const extensions = [
     ...(options.extensions ?? []),
     ...(options.extend?.(channels) ?? []),

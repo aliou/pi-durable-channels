@@ -28,6 +28,7 @@ import {
   inbound,
   killable,
   MODEL,
+  type Responder,
   setup,
   sqliteStorage,
   stateOf,
@@ -420,6 +421,113 @@ describe("send failures and recovery", () => {
       state: "blocked",
       reason: "missing_task",
     });
+    await harness.close(context);
+  });
+});
+
+describe("tools", () => {
+  const callTool = (name: string, args: Record<string, string>) =>
+    ((text, last) =>
+      last?.role === "user" && text.startsWith("call")
+        ? fauxAssistantMessage(fauxToolCall(name, args), {
+            stopReason: "toolUse",
+          })
+        : fauxAssistantMessage(`done: ${text}`)) satisfies Responder;
+
+  it("send_message delivers to an address of the conversation with its address data, retrying failures", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(inbound("hi", "evt-0"));
+    await harness.waitForIdle(context);
+    await hub.bind(
+      { channel: "web", address: "thread-2", addressData: { team: "t2" } },
+      first.conversationId,
+    );
+    test.adapter.sent.length = 0;
+    test.state.respond = callTool("send_message", {
+      channel: "web",
+      address: "thread-2",
+      text: "ping",
+    });
+    test.adapter.failures = 1;
+
+    await deliver(inbound("call", "evt-1"));
+    await harness.waitForIdle(context);
+    await eventually(
+      () =>
+        test.adapter.sent.filter(
+          ({ message }) => message.address === "thread-2",
+        ).length === 2,
+    );
+    const notifications = test.adapter.sent.filter(
+      ({ message }) => message.address === "thread-2",
+    );
+    expect(
+      notifications.map(({ message, ctx }) => [
+        message.parts,
+        ctx.addressData,
+        ctx.replyContext,
+      ]),
+    ).toEqual([
+      [[{ type: "text", text: "ping" }], { team: "t2" }, undefined],
+      [[{ type: "text", text: "ping" }], { team: "t2" }, undefined],
+    ]);
+    expect(notifications[0]?.ctx.idempotencyKey).toMatch(/^notify:/);
+    expect(notifications[1]?.ctx.idempotencyKey).toBe(
+      notifications[0]?.ctx.idempotencyKey,
+    );
+    const reply = test.adapter.sent.find(
+      ({ message }) => message.address === "thread-1",
+    );
+    expect(reply?.message.parts[0]?.text).toMatch(
+      /^done: Message queued for thread-2/,
+    );
+    await harness.close(context);
+  });
+
+  it("send_message refuses unknown addresses and addresses of other conversations", async () => {
+    const test = setup();
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    await deliver(inbound("hi", "evt-0", { address: "thread-2" }));
+    await harness.waitForIdle(context);
+    test.adapter.sent.length = 0;
+    for (const address of ["nobody", "thread-2"]) {
+      test.state.respond = callTool("send_message", {
+        channel: "web",
+        address,
+        text: "ping",
+      });
+      await deliver(inbound("call", `evt-${address}`));
+      await harness.waitForIdle(context);
+    }
+    expect(
+      test.adapter.sent.map(({ message }) => [
+        message.address,
+        message.parts[0]?.text,
+      ]),
+    ).toEqual([
+      ["thread-1", "done: Unknown address nobody on channel web."],
+      ["thread-1", "done: Unknown address thread-2 on channel web."],
+    ]);
+    await harness.close(context);
+  });
+
+  it("list_addresses lists the conversation's own addresses, without transport data", async () => {
+    const test = setup({ respond: callTool("list_addresses", {}) });
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await deliver(inbound("x", "evt-0", { address: "ops-room" }));
+    const first = await deliver(
+      inbound("hi", "evt-1", { addressData: { secret: "s" } }),
+    );
+    await harness.waitForIdle(context);
+    await hub.bind({ channel: "web", address: "pr-1" }, first.conversationId);
+    await deliver(inbound("call", "evt-2"));
+    await harness.waitForIdle(context);
+    const reply = test.adapter.sent.at(-1)?.message.parts[0]?.text ?? "";
+    expect(JSON.parse(reply.replace(/^done: /, ""))).toEqual([
+      { channel: "web", address: "thread-1" },
+      { channel: "web", address: "pr-1" },
+    ]);
     await harness.close(context);
   });
 });
