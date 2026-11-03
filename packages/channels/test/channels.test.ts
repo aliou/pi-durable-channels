@@ -631,3 +631,149 @@ describe("adapters", () => {
     await harness.close(context);
   });
 });
+
+describe("lifecycle", () => {
+  async function busy() {
+    const held: { gate?: ReturnType<typeof gate> } = { gate: gate() };
+    const work = holdTool(held);
+    const test = setup({
+      extensions: [work],
+      respond: (text, last) =>
+        last?.role === "user" && text.startsWith("start")
+          ? fauxAssistantMessage(fauxToolCall("work", {}), {
+              stopReason: "toolUse",
+            })
+          : fauxAssistantMessage(`answer to ${text}`),
+    });
+    const opened = await test.open(new MemoryStorage());
+    const first = await opened.deliver(inbound("start", "evt-1"));
+    await eventually(async () => {
+      const state = await stateOf(opened.hub, first.submissionId);
+      return state === "running";
+    });
+    const queued = await opened.deliver(inbound("queued", "evt-2"));
+    return { ...opened, test, held, first, queued };
+  }
+
+  const key = { channel: "web", address: "thread-1" };
+
+  it("cancel stops the run and withdraws queued messages, leaving the binding", async () => {
+    const { harness, hub, test, deliver, first, queued, held } = await busy();
+    await hub.cancel(key);
+    held.gate?.open();
+    await harness.waitForIdle(context);
+    await expect(hub.status(first.submissionId)).resolves.toEqual({
+      state: "aborted",
+    });
+    await expect(hub.status(queued.submissionId)).resolves.toEqual({
+      state: "aborted",
+    });
+    expect(test.adapter.sent).toEqual([]);
+    const next = await deliver(inbound("again", "evt-3"));
+    await harness.waitForIdle(context);
+    expect(next.conversationId).toBe(first.conversationId);
+    expect(
+      test.adapter.sent.map(({ message }) => message.parts[0]?.text),
+    ).toEqual(["answer to again"]);
+    await harness.close(context);
+  });
+
+  it("cancel aborts a reply that is still being sent", async () => {
+    const test = setup();
+    test.adapter.hold = true;
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const receipt = await deliver(inbound("hello", "evt-1"));
+    await eventually(() => test.adapter.sent.length === 1);
+    await hub.cancel(key);
+    await expect(hub.status(receipt.submissionId)).resolves.toEqual({
+      state: "aborted",
+    });
+    await harness.close(context);
+  });
+
+  it("clear starts a fresh context in the same conversation", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(inbound("one", "evt-1"));
+    await harness.waitForIdle(context);
+    await hub.clear(key);
+    const second = await deliver(inbound("two", "evt-2"));
+    await harness.waitForIdle(context);
+    expect(second.conversationId).toBe(first.conversationId);
+    const conversation = await conversationOf(harness, first.conversationId);
+    const view = await conversation.context(context);
+    expect(
+      view.messages
+        .filter((message) => message.role === "user")
+        .map((message) => textOf({ model: [message] })),
+    ).toEqual(["two"]);
+    await harness.close(context);
+  });
+
+  it("compact summarizes the conversation", async () => {
+    const test = setup({
+      settings: { compaction: { keepRecentTokens: 1 } },
+      respond: (text) =>
+        fauxAssistantMessage(
+          text.includes("summar") ? "summary" : `echo ${text}`,
+        ),
+    });
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(inbound("one", "evt-1"));
+    await harness.waitForIdle(context);
+    await hub.compact(key);
+    await harness.waitForIdle(context);
+    const conversation = await conversationOf(harness, first.conversationId);
+    const entries = await entriesOf(conversation);
+    expect(entries.map((entry) => entry.kind)).toContain("pi.compaction");
+    await harness.close(context);
+  });
+
+  it("end cancels outstanding work and unmaps every address; the next message starts fresh", async () => {
+    const { harness, hub, test, deliver, first, held } = await busy();
+    await hub.bind(
+      { channel: "web", address: "alias-1" },
+      first.conversationId,
+    );
+    await hub.end(key);
+    held.gate?.open();
+    await harness.waitForIdle(context);
+    expect(test.adapter.sent).toEqual([]);
+    const next = await deliver(inbound("again", "evt-3"));
+    await harness.waitForIdle(context);
+    expect(next.conversationId).not.toBe(first.conversationId);
+    const aliased = await deliver(
+      inbound("hi", "evt-5", { address: "alias-1" }),
+    );
+    expect(aliased.conversationId).not.toBe(first.conversationId);
+    expect(aliased.conversationId).not.toBe(next.conversationId);
+    await harness.waitForIdle(context);
+    expect(
+      test.adapter.sent.map(({ message }) => message.parts[0]?.text),
+    ).toEqual(["answer to again", "answer to hi"]);
+    await harness.close(context);
+  });
+
+  it("end racing a delivery leaves no reply from the old binding", async () => {
+    const { harness, hub, test, deliver, first, held } = await busy();
+    const ending = hub.end(key);
+    const late = deliver(inbound("late", "evt-4"));
+    held.gate?.open();
+    await ending;
+    const receipt = await late;
+    await harness.waitForIdle(context);
+    expect(receipt.conversationId).not.toBe(first.conversationId);
+    expect(
+      test.adapter.sent.map(({ message }) => message.parts[0]?.text),
+    ).toEqual(["answer to late"]);
+    await harness.close(context);
+  });
+
+  it("ignores an address without a binding", async () => {
+    const test = setup();
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await hub.end(key);
+    await hub.cancel(key);
+    await harness.close(context);
+  });
+});

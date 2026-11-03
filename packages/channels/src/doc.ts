@@ -50,6 +50,27 @@ export function findBinding(
   return own(own(state?.bindings, key.channel), key.address);
 }
 
+function entriesOf(
+  state: Readonly<ChannelsState> | undefined,
+): (AddressKey & { binding: Binding })[] {
+  return Object.entries(state?.bindings ?? {}).flatMap(([channel, addresses]) =>
+    Object.entries(addresses).map(([address, binding]) => ({
+      channel,
+      address,
+      binding,
+    })),
+  );
+}
+
+export function conversationAddresses(
+  state: Readonly<ChannelsState> | undefined,
+  conversationId: ConversationId,
+): AddressKey[] {
+  return entriesOf(state)
+    .filter(({ binding }) => binding.conversationId === conversationId)
+    .map(({ channel, address }) => ({ channel, address }));
+}
+
 export function setBinding(
   state: Draft<ChannelsState>,
   key: AddressKey,
@@ -58,4 +79,15 @@ export function setBinding(
   if (!Object.hasOwn(state.bindings, key.channel))
     state.bindings[key.channel] = {};
   state.bindings[key.channel][key.address] = binding;
+}
+
+export function deleteConversation(
+  state: Draft<ChannelsState>,
+  conversationId: ConversationId,
+): void {
+  for (const { channel, address } of conversationAddresses(
+    state,
+    conversationId,
+  ))
+    delete state.bindings[channel][address];
 }

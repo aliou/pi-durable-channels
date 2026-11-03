@@ -1,6 +1,7 @@
 import { copyJson, type JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
+  type Conversation,
   type ConversationId,
   configure,
   type EntryId,
@@ -15,6 +16,7 @@ import {
   type ChannelMessageData,
   ChannelNote,
   ChannelsDoc,
+  deleteConversation,
   findBinding,
   setBinding,
 } from "./doc";
@@ -43,6 +45,10 @@ export type ChannelsHub = {
   ): Promise<DeliveryReceipt | undefined>;
   bind(target: BindTarget, conversationId: ConversationId): Promise<void>;
   status(deliveryId: SubmissionId): Promise<DeliveryStatus | undefined>;
+  cancel(key: AddressKey): Promise<void>;
+  clear(key: AddressKey): Promise<void>;
+  compact(key: AddressKey): Promise<void>;
+  end(key: AddressKey): Promise<void>;
 };
 
 export type HubSetup = {
@@ -257,10 +263,47 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     return replyStatus(record.conversationId, record.entry);
   }
 
+  function atAddress(
+    key: AddressKey,
+    run: (conversation: Conversation) => Promise<void>,
+  ): Promise<void> {
+    return serial(key, async () => {
+      const state = await harness.snapshot(ChannelsDoc, context);
+      const binding = findBinding(state, key);
+      if (binding === undefined) return;
+      const conversation = await harness.conversation(
+        binding.conversationId,
+        context,
+      );
+      if (conversation !== undefined) await run(conversation);
+    });
+  }
+
+  const cancel = (conversation: Conversation) =>
+    conversation.abort(context, { background: true });
+
   return {
     start,
     deliver,
     bind,
     status,
+    cancel: (key) => atAddress(key, cancel),
+    clear: (key) =>
+      atAddress(key, async (conversation) => {
+        await cancel(conversation);
+        await conversation.reset(undefined, context);
+      }),
+    compact: (key) =>
+      atAddress(key, async (conversation) => {
+        await conversation.compact(undefined, context);
+      }),
+    end: (key) =>
+      atAddress(key, async (conversation) => {
+        await cancel(conversation);
+        await harness.commit(async (tx) => {
+          const state = await tx.doc(ChannelsDoc);
+          deleteConversation(state, conversation.id);
+        }, context);
+      }),
   };
 }
