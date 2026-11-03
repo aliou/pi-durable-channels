@@ -1,0 +1,26 @@
+{
+  "cus_acme": {
+    "company": "Acme Analytics",
+    "owner": "dana@example.com",
+    "segment": "mid-market",
+    "arr": 28800,
+    "renewal": "2027-01-15",
+    "seats": { "paid": 40, "activeLast30Days": 37 },
+    "notes": [
+      "Expanded from 25 to 40 seats in June.",
+      "Champion: Priya, head of data."
+    ]
+  },
+  "cus_northwind": {
+    "company": "Northwind Studio",
+    "owner": "sam@example.com",
+    "segment": "smb",
+    "arr": 1188,
+    "renewal": "2026-12-02",
+    "seats": { "paid": 5, "activeLast30Days": 1 },
+    "notes": [
+      "Signed up through a partner promotion.",
+      "Champion left the company in September."
+    ]
+  }
+}

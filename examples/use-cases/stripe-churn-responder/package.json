@@ -1,0 +1,22 @@
+{
+  "name": "@examples/stripe-churn-responder",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env index.ts",
+    "replay": "tsx --env-file-if-exists=.env replay.ts",
+    "check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@aliou/pi-durable-channels": "workspace:*",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "@examples/shared": "workspace:*",
+    "@examples/slack-channel": "workspace:*",
+    "stripe": "^23.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "cus_acme": [
+    {
+      "id": "T-1042",
+      "opened": "2026-10-28",
+      "status": "open",
+      "subject": "Card on file expires this month, how do we update it?"
+    }
+  ],
+  "cus_northwind": [
+    {
+      "id": "T-0981",
+      "opened": "2026-09-12",
+      "status": "open",
+      "subject": "Export to CSV times out on large projects"
+    },
+    {
+      "id": "T-0996",
+      "opened": "2026-09-30",
+      "status": "open",
+      "subject": "Still no fix for the export timeout?"
+    },
+    {
+      "id": "T-1013",
+      "opened": "2026-10-14",
+      "status": "open",
+      "subject": "Considering alternatives because of exports"
+    }
+  ]
+}
