@@ -1,11 +1,5 @@
-export { inboundOf, type SlackInbound } from "./events";
-export {
-  httpEvents,
-  type SlackChannel,
-  type SlackOptions,
-  type SlackTransport,
-  slackChannel,
-  slackTarget,
-  socketMode,
-} from "./slack";
+export { inboundOf, type SlackInbound, stoppedAddressOf } from "./events";
+export { type SlackChannel, type SlackOptions, slackChannel } from "./slack";
+export { slackTarget } from "./target";
+export { httpEvents, type SlackTransport, socketMode } from "./transport";
 export { verifySlackSignature } from "./verify";
