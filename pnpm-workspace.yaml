@@ -1,6 +1,7 @@
 packages:
   - "packages/*"
   - "examples/channels/*"
+  - "examples/use-cases/*"
 minimumReleaseAgeExclude:
   - tsdown@0.23.5
 allowBuilds:

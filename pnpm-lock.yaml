@@ -68,6 +68,43 @@ importers:
         specifier: ^5.1.0
         version: 5.1.0(@types/node@25.9.9)(vite@8.3.5(@types/node@25.9.9)(esbuild@0.28.2)(tsx@4.23.15))
 
+  examples/use-cases/generic-webhook-agent:
+    dependencies:
+      '@aliou/pi-durable-channels':
+        specifier: workspace:*
+        version: link:../../../packages/channels
+      '@earendil-works/pi-durable':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)
+      '@earendil-works/pi-schema':
+        specifier: 1.5.0
+        version: 1.5.0
+      '@examples/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@examples/webhook-channel':
+        specifier: workspace:*
+        version: link:../../channels/webhook
+    devDependencies:
+      tsx:
+        specifier: ^4.20.0
+        version: 4.23.15
+
+  examples/use-cases/shared:
+    dependencies:
+      '@aliou/pi-durable-channels':
+        specifier: workspace:*
+        version: link:../../../packages/channels
+      '@earendil-works/chord':
+        specifier: 1.5.0
+        version: 1.5.0(esbuild@0.28.2)
+      '@earendil-works/pi-ai':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)
+
   packages/channels:
     dependencies:
       '@earendil-works/chord':
@@ -1881,7 +1918,6 @@ snapshots:
       '@esbuild/win32-arm64': 0.28.2
       '@esbuild/win32-ia32': 0.28.2
       '@esbuild/win32-x64': 0.28.2
-    optional: true
 
   estree-walker@3.0.3:
     dependencies:
@@ -2198,7 +2234,6 @@ snapshots:
       esbuild: 0.28.2
     optionalDependencies:
       fsevents: 2.3.3
-    optional: true
 
   typescript@5.9.3: {}
 
