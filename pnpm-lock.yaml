@@ -24,6 +24,28 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
+  examples/channels/webhook:
+    dependencies:
+      '@aliou/pi-durable-channels':
+        specifier: workspace:*
+        version: link:../../../packages/channels
+      '@earendil-works/pi-schema':
+        specifier: 1.5.0
+        version: 1.5.0
+    devDependencies:
+      '@earendil-works/chord':
+        specifier: 1.5.0
+        version: 1.5.0(esbuild@0.28.2)
+      '@earendil-works/pi-ai':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)
+      '@earendil-works/pi-durable':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.92)(@smithy/signature-v4@5.7.5)(esbuild@0.28.2)
+      vitest:
+        specifier: ^5.1.0
+        version: 5.1.0(@types/node@25.9.9)(vite@8.3.5(@types/node@25.9.9)(esbuild@0.28.2)(tsx@4.23.15))
+
   packages/channels:
     dependencies:
       '@earendil-works/chord':
