@@ -44,9 +44,9 @@ teammate writes in the case thread (Socket Mode, or POST /slack/events)
 
 ## Try it
 
-Create a Slack app with the `chat:write` and `channels:history` bot scopes, subscribe it to `message.channels`, invite
-it to the case channel, and either enable Socket Mode (app token with `connections:write`) or point Event
-Subscriptions at `/slack/events`. Configuration is in `.env.example`.
+Set up a Slack app as the [Slack channel README](../../channels/slack/README.md#slack-app-setup) describes, invite it
+to the case channel, and either use Socket Mode or point Event Subscriptions at `/slack/events`. Configuration is in
+`.env.example`.
 
 ```sh
 nix develop -c pnpm --filter @examples/stripe-churn-responder start
