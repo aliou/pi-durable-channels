@@ -27,5 +27,17 @@
     "indentStyle": "space",
     "indentWidth": 2
   },
-  "plugins": ["@aliou/biome-plugins/presets/recommended"]
+  "plugins": ["@aliou/biome-plugins/presets/recommended"],
+  "overrides": [
+    {
+      "includes": ["packages/channels/src/types.ts"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noConfusingVoidType": "off"
+          }
+        }
+      }
+    }
+  ]
 }

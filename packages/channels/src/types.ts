@@ -1,0 +1,75 @@
+import type { JsonValue } from "@earendil-works/chord";
+import type {
+  AgentChange,
+  ConversationId,
+  SubmissionId,
+} from "@earendil-works/pi-durable";
+
+export type BusyPolicy = "queue" | "steer";
+
+export type InboundMessage = {
+  address: string;
+  text: string;
+  requestId: string;
+  author: string;
+  addressData?: JsonValue;
+  replyContext?: JsonValue;
+};
+
+export type DeliverOptions = { whenBusy?: BusyPolicy; run?: boolean };
+
+export type OutboundPart = { type: "text"; text: string };
+
+export type OutboundMessage = {
+  address: string;
+  parts: readonly OutboundPart[];
+};
+
+export type SendContext = {
+  addressData?: JsonValue;
+  replyContext?: JsonValue;
+  idempotencyKey: string;
+  signal: AbortSignal;
+};
+
+export type SendResult = { addressData?: JsonValue; alias?: string };
+
+export type DeliveryReceipt = {
+  submissionId: SubmissionId;
+  conversationId: ConversationId;
+};
+
+export type Deliver = (
+  message: InboundMessage,
+  options?: DeliverOptions,
+) => Promise<DeliveryReceipt | undefined>;
+
+export type ChannelAdapter = {
+  start?(ctx: { deliver: Deliver; signal: AbortSignal }): void | Promise<void>;
+  send(
+    message: OutboundMessage,
+    ctx: SendContext,
+  ): Promise<SendResult | undefined | void>;
+};
+
+export type AddressKey = { channel: string; address: string };
+
+export type ConversationSetup = { agent?: AgentChange };
+
+export type ChannelRegistration = {
+  adapter: ChannelAdapter;
+  conversation?(message: InboundMessage): ConversationSetup | undefined;
+};
+
+export type SendRetry = { attempts: number; baseDelayMs: number };
+
+export type ChannelsOptions = {
+  channels: Readonly<Record<string, ChannelRegistration>>;
+  whenBusy?: BusyPolicy;
+  retry?: SendRetry;
+};
+
+export type DeliveryStatus =
+  | { state: "queued" | "running" | "sending" | "done" | "aborted" }
+  | { state: "failed"; error: string }
+  | { state: "blocked"; reason: string };

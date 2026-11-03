@@ -21,6 +21,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r check",
+    "test": "pnpm -r test",
     "lint": "biome check",
     "format": "biome check --write"
   },

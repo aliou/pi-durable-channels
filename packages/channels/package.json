@@ -1,0 +1,41 @@
+{
+  "name": "@aliou/pi-durable-channels",
+  "version": "0.0.0",
+  "description": "Durable inbound and outbound messaging channels for pi-durable hosts",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aliou/pi-durable-channels",
+    "directory": "packages/channels"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "vitest": "^5.1.0"
+  }
+}

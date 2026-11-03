@@ -1,0 +1,54 @@
+import type { Tx } from "@earendil-works/pi-durable";
+import {
+  type ConversationId,
+  defineExtension,
+  type Extension,
+  GenerationTask,
+  type Harness,
+  hook,
+} from "@earendil-works/pi-durable";
+import { type BindTarget, bindAddress, EXTENSION } from "./bind";
+import { replyHook } from "./hook";
+import { type ChannelsHub, createHub } from "./hub";
+import { defineSendTask } from "./send";
+import type { ChannelRegistration, ChannelsOptions } from "./types";
+
+const DEFAULT_RETRY = { attempts: 5, baseDelayMs: 1000 };
+
+export type Channels = {
+  extension: Extension;
+  bind(
+    tx: Tx,
+    target: BindTarget,
+    conversationId: ConversationId,
+  ): Promise<void>;
+  hub(harness: Harness): ChannelsHub;
+};
+
+export function createChannels(options: ChannelsOptions): Channels {
+  const registration = (channel: string): ChannelRegistration => {
+    if (!Object.hasOwn(options.channels, channel))
+      throw new Error(`No channel ${channel}`);
+    return options.channels[channel];
+  };
+  const Send = defineSendTask(
+    (channel) =>
+      Object.hasOwn(options.channels, channel)
+        ? options.channels[channel].adapter
+        : undefined,
+    options.retry ?? DEFAULT_RETRY,
+  );
+
+  return {
+    extension: defineExtension({
+      name: EXTENSION,
+      tasks: [Send],
+      hooks: [hook(GenerationTask, { afterRun: replyHook(Send) })],
+    }),
+    bind: async (tx, target, conversationId) => {
+      registration(target.channel);
+      await bindAddress(tx, target, conversationId);
+    },
+    hub: (harness) => createHub(harness, { options, registration }),
+  };
+}
