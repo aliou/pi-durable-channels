@@ -1,7 +1,8 @@
 export type { BindTarget } from "./bind";
 export { type Channels, createChannels } from "./core";
-export type { ChannelsHub } from "./hub";
+export type { ChannelsHub, HubOptions } from "./hub";
 export type {
+  AdapterStart,
   AddressKey,
   BusyPolicy,
   ChannelAdapter,
@@ -12,9 +13,12 @@ export type {
   DeliverOptions,
   DeliveryReceipt,
   DeliveryStatus,
+  InboundFile,
   InboundMessage,
   OutboundMessage,
   OutboundPart,
+  ReplyProgress,
+  ReplyTarget,
   SendContext,
   SendResult,
   SendRetry,

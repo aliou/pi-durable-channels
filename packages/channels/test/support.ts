@@ -20,6 +20,7 @@ import {
   type EntryRecord,
   type Extension,
   Harness,
+  type HarnessOptions,
   type HarnessSettings,
   type Report,
   type Storage,
@@ -135,6 +136,12 @@ afterEach(async () => {
   directories.clear();
 });
 
+export async function tempDir(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "pi-durable-channels-"));
+  directories.add(directory);
+  return directory;
+}
+
 export async function sqliteStorage(): Promise<() => Promise<Storage>> {
   const directory = await mkdtemp(join(tmpdir(), "pi-durable-channels-"));
   directories.add(directory);
@@ -162,6 +169,8 @@ export function killable(inner: Storage): { storage: Storage; kill(): void } {
 export const createWeb = () => ({ agent: { model: MODEL } });
 
 export type SetupOptions = Partial<ChannelsOptions> & {
+  faux?: Parameters<typeof fauxProvider>[0];
+  env?: HarnessOptions["env"];
   conversation?: ChannelRegistration["conversation"];
   respond?: Responder;
   settings?: HarnessSettings;
@@ -180,7 +189,7 @@ export function setup(options: SetupOptions = {}) {
   };
   const channels = createChannels(channelsOptions);
   const state = { respond: options.respond ?? echo };
-  const faux = fauxProvider();
+  const faux = fauxProvider(options.faux);
   const factory: FauxResponseFactory = (transcript) => {
     const last = transcript.messages
       .filter((message) => message.role !== "system")
@@ -208,10 +217,11 @@ export function setup(options: SetupOptions = {}) {
         registry,
         settings: options.settings ?? {},
         onReport: (report) => reports.push(report),
+        env: options.env,
       },
       context,
     );
-    const hub = channels.hub(harness);
+    const hub = channels.hub(harness, { env: options.env });
     const deliver = (
       message: InboundMessage,
       deliverOptions?: DeliverOptions,

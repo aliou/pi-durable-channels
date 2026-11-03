@@ -94,7 +94,11 @@ describe("webhook fetch", () => {
   });
   const route = {
     handle: async (request: Request, ctx: { deliver: Deliver }) => {
-      await adapter.start?.({ ...ctx, signal: new AbortController().signal });
+      await adapter.start?.({
+        ...ctx,
+        cancel: async () => undefined,
+        signal: new AbortController().signal,
+      });
       return adapter.fetch(request);
     },
   };

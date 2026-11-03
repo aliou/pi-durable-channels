@@ -7,11 +7,14 @@ import type {
 
 export type BusyPolicy = "queue" | "steer";
 
+export type InboundFile = { name: string; mimeType: string; url: string };
+
 export type InboundMessage = {
   address: string;
   text: string;
   requestId: string;
   author: string;
+  files?: readonly InboundFile[];
   addressData?: JsonValue;
   replyContext?: JsonValue;
 };
@@ -44,12 +47,32 @@ export type Deliver = (
   options?: DeliverOptions,
 ) => Promise<DeliveryReceipt | undefined>;
 
+export type ReplyTarget = {
+  address: string;
+  addressData?: JsonValue;
+  replyContext?: JsonValue;
+  idempotencyKey: string;
+};
+
+export type ReplyProgress =
+  | { type: "working" }
+  | { type: "text"; text: string }
+  | { type: "stopped"; reason: "failed" | "aborted" };
+
+export type AdapterStart = {
+  deliver: Deliver;
+  cancel(address: string): Promise<void>;
+  signal: AbortSignal;
+};
+
 export type ChannelAdapter = {
-  start?(ctx: { deliver: Deliver; signal: AbortSignal }): void | Promise<void>;
+  start?(ctx: AdapterStart): void | Promise<void>;
   send(
     message: OutboundMessage,
     ctx: SendContext,
   ): Promise<SendResult | undefined | void>;
+  progress?(target: ReplyTarget, update: ReplyProgress): void | Promise<void>;
+  fetchFile?(url: string): Promise<Uint8Array>;
 };
 
 export type AddressKey = { channel: string; address: string };

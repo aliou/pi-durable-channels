@@ -11,14 +11,19 @@ An adapter connects one platform to the channels core. The core owns conversatio
 
 ```ts
 type ChannelAdapter = {
-  start?(ctx: { deliver: Deliver; signal: AbortSignal }): void | Promise<void>;
+  start?(ctx: { deliver: Deliver; cancel(address: string): Promise<void>; signal: AbortSignal }): void | Promise<void>;
   send(message: OutboundMessage, ctx: SendContext): Promise<SendResult | undefined | void>;
+  progress?(target: ReplyTarget, update: ReplyProgress): void | Promise<void>;
+  fetchFile?(url: string): Promise<Uint8Array>;
 };
 ```
 
 - `start` runs once from `hub.start(signal)`. Open sockets, watchers, or pollers here and stop them when `signal` aborts. An HTTP adapter keeps `deliver` and exposes its own `fetch(request): Promise<Response>` for the host to mount; answer 503 until `start` ran.
 - `deliver(message, { whenBusy?, run? })` admits one inbound message. It resolves to a receipt, or to `undefined` when no conversation takes the address. `run: false` stores the message as context without a run or a reply, and never creates a conversation.
 - `send` posts one outbound message: a reply, or a `send_message` notification. Throwing retries it with backoff and the same `idempotencyKey`.
+- `cancel(address)` stops the run of the conversation bound to `address`, as `hub.cancel` does. Map a platform stop button to it.
+- `progress` reports a reply while the model works on it: `{ type: "working" }` when the run starts, `{ type: "text", text }` with the current model response's text so far, and `{ type: "stopped", reason }` when the run fails or is aborted. Use it for typing indicators, session status, or streaming. `target.idempotencyKey` equals the `idempotencyKey` the reply's `send` gets, so `send` can finish a stream instead of posting again. A new model response after a tool round starts its text over. Progress is best effort: errors are ignored, nothing is stored, and after a crash `send` still posts the full answer.
+- `fetchFile` downloads a file a message listed in `files`, with the platform's credentials. Check the URL's host before sending a token.
 - `send` may return `{ addressData?, alias? }`. `addressData` replaces the stored data of the address it sent to. `alias` binds another address of the same channel to the same conversation. Use both when the first post creates the real thread, as Slack does.
 
 Host wiring:
@@ -31,9 +36,11 @@ const channels = createChannels({
 });
 registry.install(channels.extension);
 registry.install(channels.tools);
-const hub = channels.hub(harness);
+const hub = channels.hub(harness, { env });
 await hub.start(signal);
 ```
+
+`env` is the same environment builder the host passes to `Harness.open`. Without it, attachments are named to the model but not saved.
 
 `conversation` is optional. Without it, only addresses bound by application code reach a conversation. Bind from a tool in its own commit:
 
@@ -49,7 +56,8 @@ Host code uses `hub.bind(target, conversationId)`. An address belongs to one con
 - `requestId`: the platform's stable ID for this message, so redeliveries are ignored. Use the event or message ID, or a delivery header. Fall back to a hash of the body. Never use a timestamp of receipt.
 - `author`: who wrote it, from the verified payload.
 - `addressData`: per-address data `send` needs later, such as a callback URL. It is stored on the binding and replaced by the next delivery that carries it, so only send it when it changes.
-- `replyContext`: per-message data the reply needs, such as a reply URL. It is not stored on the binding.
+- `replyContext`: per-message data the reply needs, such as a reply URL or the recipient of a stream. It is not stored on the binding, and `progress` gets it too.
+- `files`: attachments as `{ name, mimeType, url }`. Before admitting the message, the core downloads each through `fetchFile`, saves it in the conversation's environment under `.channels/attachments/<hash>/`, and lists its path after the text, so the agent's tools can open it. PNG, JPEG, GIF, and WebP images within pi-durable's image limit also reach the model inline. A file that fails to download or save is named with the reason.
 
 The tools extension shows the model only the addresses bound to its own conversation, so personas stay isolated.
 
@@ -65,7 +73,7 @@ The tools extension shows the model only the addresses bound to its own conversa
 
 ## Delivery semantics
 
-- `deliver` returns once the message is durable. Acknowledge the platform after that, so a crash before the acknowledgement makes the platform redeliver; `requestId` drops the duplicate. Platforms with short deadlines (Slack: 3 seconds) are fine because `deliver` only commits.
+- `deliver` returns once the message is durable. Acknowledge the platform after that, so a crash before the acknowledgement makes the platform redeliver; `requestId` drops the duplicate. `deliver` only commits, unless the message has files: it downloads them first, which can exceed short acknowledgement deadlines (Slack: 3 seconds). The platform then redelivers, and `requestId` drops the duplicate.
 - Sends are at least once. A crash after the platform accepted a post but before the task recorded it posts again with the same `idempotencyKey`. Pass the key to platforms that accept one. Otherwise accept the rare duplicate, or look for an earlier post carrying the key before posting.
 - `send` has no permanent failure path: every throw retries until the attempts run out. Return without posting for content you choose not to send.
 - Drop the platform's echoes of your own posts in the adapter, such as bot messages.

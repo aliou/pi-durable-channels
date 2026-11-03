@@ -43,10 +43,13 @@ await hub.start(signal);
 adapter (socket event, HTTP request, file)   verify, parse
   deliver(message, { whenBusy?, run? })      serialized per address
     commit: unknown address → conversation(message) → create conversation, bind the address
+    files → adapter.fetchFile(url) → save in the conversation's env → paths after the text, images inline
     commit: conversation.submit(tx, input as a channel.message entry, or a channel.note write when run is false)
   → { submissionId, conversationId }, or undefined when no conversation takes the address
 
 conversation runs (queue or steer, model, tools)
+  progress watcher (adapters with progress)
+    run starts → progress(target, working); partial answer → progress(target, text); failure or abort → stopped
   afterRun hook
     one channels.send task per channel.message entry in the run
       adapter.send(reply, { replyContext, addressData, idempotencyKey: reply:<entry> })
@@ -67,20 +70,24 @@ conversation runs (queue or steer, model, tools)
 
 ```ts
 type ChannelAdapter = {
-  start?(ctx: { deliver; signal }): void | Promise<void>;
+  start?(ctx: { deliver; cancel; signal }): void | Promise<void>;
   send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
+  progress?(target, update): void | Promise<void>;
+  fetchFile?(url): Promise<Uint8Array>;
 };
 ```
 
-`start` opens the adapter's inbound transport and keeps `deliver`. HTTP adapters expose a `fetch(request)` the host
-mounts. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and
+`start` opens the adapter's inbound transport and keeps `deliver` and `cancel`. HTTP adapters expose a
+`fetch(request)` the host mounts. `progress` drives typing indicators, session status, or streaming. `fetchFile`
+downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
+the host's `env` builder: `channels.hub(harness, { env })`. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and
 testing.
 
 ## Hub
 
 | Method | Effect |
 | --- | --- |
-| `start(signal?)` | Start every adapter with a `deliver` bound to its channel |
+| `start(signal?)` | Start every adapter with a `deliver` and `cancel` bound to its channel, and watch runs for `progress` |
 | `deliver(channel, message, options?)` | Admit a message; resolves once it is stored |
 | `bind(target, conversationId)` | Attach an address to a conversation |
 | `status(submissionId)` | `queued`, `running`, `sending`, `done`, `aborted`, `failed`, or `blocked` |

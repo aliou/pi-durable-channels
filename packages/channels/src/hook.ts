@@ -14,21 +14,22 @@ export function replyKey(entryId: EntryId): string {
   return `reply:${entryId}`;
 }
 
-async function runEntries(
-  api: HookApi,
-  first: EntryId,
-  last: EntryId,
+export type EntrySource = Pick<HookApi, "entries">;
+
+export async function runEntries(
+  source: EntrySource,
+  range: { first: EntryId; last?: EntryId },
   context: Context,
 ): Promise<EntryRecord[]> {
   const entries: EntryRecord[] = [];
   let cursor: Parameters<HookApi["entries"]>[2];
   do {
     const query = {
-      minEntryId: first,
-      maxEntryId: last,
+      minEntryId: range.first,
+      ...(range.last === undefined ? {} : { maxEntryId: range.last }),
       order: "ascending",
     } as const;
-    const page = await api.entries(query, 100, cursor, context);
+    const page = await source.entries(query, 100, cursor, context);
     entries.push(...page.items);
     cursor = page.next;
   } while (cursor !== undefined);
@@ -46,7 +47,7 @@ function answerParts(entry: EntryRecord | undefined): OutboundPart[] {
 
 export function replyHook(Send: SendTask): GenerationHooks["afterRun"] {
   return async (run, api, context) => {
-    const entries = await runEntries(api, run.first, run.last, context);
+    const entries = await runEntries(api, run, context);
     const messages = entries.filter(ChannelMessage.is);
     if (messages.length === 0) return undefined;
     const answer = await api.entry(run.answer, context);

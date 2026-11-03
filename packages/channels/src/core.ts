@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { type BindTarget, bindAddress, EXTENSION } from "./bind";
 import { replyHook } from "./hook";
-import { type ChannelsHub, createHub } from "./hub";
+import { type ChannelsHub, createHub, type HubOptions } from "./hub";
 import { defineSendTask } from "./send";
 import { defineChannelTools } from "./tools";
 import type { ChannelRegistration, ChannelsOptions } from "./types";
@@ -24,7 +24,7 @@ export type Channels = {
     target: BindTarget,
     conversationId: ConversationId,
   ): Promise<void>;
-  hub(harness: Harness): ChannelsHub;
+  hub(harness: Harness, options?: HubOptions): ChannelsHub;
 };
 
 export function createChannels(options: ChannelsOptions): Channels {
@@ -33,13 +33,11 @@ export function createChannels(options: ChannelsOptions): Channels {
       throw new Error(`No channel ${channel}`);
     return options.channels[channel];
   };
-  const Send = defineSendTask(
-    (channel) =>
-      Object.hasOwn(options.channels, channel)
-        ? options.channels[channel].adapter
-        : undefined,
-    options.retry ?? DEFAULT_RETRY,
-  );
+  const adapterFor = (channel: string) =>
+    Object.hasOwn(options.channels, channel)
+      ? options.channels[channel].adapter
+      : undefined;
+  const Send = defineSendTask(adapterFor, options.retry ?? DEFAULT_RETRY);
 
   return {
     extension: defineExtension({
@@ -52,6 +50,12 @@ export function createChannels(options: ChannelsOptions): Channels {
       registration(target.channel);
       await bindAddress(tx, target, conversationId);
     },
-    hub: (harness) => createHub(harness, { options, registration }),
+    hub: (harness, hubOptions) =>
+      createHub(harness, {
+        options,
+        registration,
+        adapterFor,
+        env: hubOptions?.env,
+      }),
   };
 }

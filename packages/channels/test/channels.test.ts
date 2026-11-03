@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   createModels,
   fauxAssistantMessage,
@@ -12,9 +14,10 @@ import {
   hook,
   MemoryStorage,
 } from "@earendil-works/pi-durable";
+import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { obj } from "@earendil-works/pi-schema";
 import { describe, expect, it } from "vitest";
-import type { Deliver } from "../src";
+import type { AdapterStart, ReplyProgress, ReplyTarget } from "../src";
 import {
   accepted,
   context,
@@ -29,9 +32,11 @@ import {
   killable,
   MODEL,
   type Responder,
+  type SetupOptions,
   setup,
   sqliteStorage,
   stateOf,
+  tempDir,
   testAdapter,
   textOf,
 } from "./support";
@@ -677,7 +682,7 @@ describe("binding", () => {
 describe("adapters", () => {
   it("start hands each adapter a deliver bound to its channel", async () => {
     const adapter = testAdapter();
-    const started: { deliver?: Deliver; signal?: AbortSignal } = {};
+    const started: Partial<AdapterStart> = {};
     adapter.start = (ctx) => {
       Object.assign(started, ctx);
     };
@@ -882,6 +887,207 @@ describe("lifecycle", () => {
     const { harness, hub } = await test.open(new MemoryStorage());
     await hub.end(key);
     await hub.cancel(key);
+    await harness.close(context);
+  });
+});
+
+type Update = { target: ReplyTarget; update: ReplyProgress };
+
+describe("attachments", () => {
+  const files = [
+    { name: "cat.png", mimeType: "image/png", url: "https://files.test/cat" },
+    {
+      name: "../report.pdf",
+      mimeType: "application/pdf",
+      url: "https://files.test/report",
+    },
+  ];
+  const bytes: Record<string, string> = {
+    "https://files.test/cat": "png-bytes",
+    "https://files.test/report": "%PDF quarterly numbers",
+  };
+
+  function withFiles(options: SetupOptions = {}) {
+    const seen: { text: string; images: string[] } = { text: "", images: [] };
+    const test = setup({
+      ...options,
+      respond: (text, last) => {
+        const parts =
+          typeof last?.content === "string" ? [] : (last?.content ?? []);
+        seen.text = text;
+        seen.images = parts.flatMap((part) =>
+          part.type === "image" ? [part.mimeType] : [],
+        );
+        return fauxAssistantMessage("got it");
+      },
+    });
+    test.adapter.fetchFile = async (url) => {
+      const body = bytes[url];
+      if (body === undefined) throw new Error("gone");
+      return new TextEncoder().encode(body);
+    };
+    return { test, seen };
+  }
+
+  it("saves files in the conversation's environment and shows images", async () => {
+    const cwd = await tempDir();
+    const env = new NodeExecutionEnv({ cwd });
+    const { test, seen } = withFiles({ env: () => env });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    await deliver({ ...inbound("look", "evt-1"), files });
+    await harness.waitForIdle(context);
+    const lines = seen.text.split("\n");
+    expect(lines[0]).toBe("look");
+    const paths = lines
+      .slice(1)
+      .map((line) => /^Attached file (\S+) \(/.exec(line)?.[1]);
+    expect(paths.map((path) => path && basename(path))).toEqual([
+      "cat.png",
+      "report.pdf",
+    ]);
+    expect(
+      paths.every((path) =>
+        path?.startsWith(join(cwd, ".channels", "attachments")),
+      ),
+    ).toBe(true);
+    await expect(readFile(paths[1] ?? "", "utf8")).resolves.toBe(
+      "%PDF quarterly numbers",
+    );
+    expect(seen.images).toEqual(["image/png"]);
+    await harness.close(context);
+  });
+
+  it("keeps files with the same name apart", async () => {
+    const env = new NodeExecutionEnv({ cwd: await tempDir() });
+    const { test, seen } = withFiles({ env: () => env });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const twins = [
+      {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        url: "https://files.test/cat",
+      },
+      {
+        name: "notes.txt",
+        mimeType: "text/plain",
+        url: "https://files.test/report",
+      },
+    ];
+    await deliver({ ...inbound("look", "evt-1"), files: twins });
+    await harness.waitForIdle(context);
+    const paths = seen.text
+      .split("\n")
+      .slice(1)
+      .map((line) => /^Attached file (\S+) \(/.exec(line)?.[1] ?? "");
+    const contents = await Promise.all(
+      paths.map((path) => readFile(path, "utf8")),
+    );
+    expect(contents).toEqual(["png-bytes", "%PDF quarterly numbers"]);
+    await harness.close(context);
+  });
+
+  it("names files it cannot download or save", async () => {
+    const { test, seen } = withFiles();
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const lost = {
+      name: "old.txt",
+      mimeType: "text/plain",
+      url: "https://files.test/old",
+    };
+    await deliver({ ...inbound("look", "evt-1"), files: [...files, lost] });
+    await harness.waitForIdle(context);
+    expect(seen.text.split("\n")).toEqual([
+      "look",
+      "Attached file cat.png (image/png), not saved: no environment",
+      "Attached file ../report.pdf (application/pdf), not saved: no environment",
+      "Attached file old.txt (text/plain), not downloaded: gone",
+    ]);
+    expect(seen.images).toEqual(["image/png"]);
+    await harness.close(context);
+  });
+});
+
+describe("progress", () => {
+  function withProgress(test: ReturnType<typeof setup>) {
+    const updates: Update[] = [];
+    const started: Partial<AdapterStart> = {};
+    test.adapter.progress = (target, update) => {
+      updates.push({ target, update });
+    };
+    test.adapter.start = (ctx) => {
+      Object.assign(started, ctx);
+    };
+    return { updates, started };
+  }
+
+  const kinds = (updates: Update[]) =>
+    updates
+      .map(({ update }) => update.type)
+      .filter((type, index, all) => all[index - 1] !== type);
+
+  it("reports work, streams the answer, and keys it like the reply", async () => {
+    const answer = "a fairly long answer that arrives in several pieces";
+    const test = setup({
+      faux: { tokensPerSecond: 400, tokenSize: { min: 1, max: 1 } },
+      settings: { progress: { partialIntervalMs: 0 } },
+      respond: () => fauxAssistantMessage(answer),
+    });
+    const { updates } = withProgress(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1", { replyContext: { ts: "1" } }));
+    await harness.waitForIdle(context);
+    expect(kinds(updates)).toEqual(["working", "text"]);
+    const texts = updates.flatMap(({ update }) =>
+      update.type === "text" ? [update.text] : [],
+    );
+    expect(texts.length).toBeGreaterThan(1);
+    expect(texts.every((text) => answer.startsWith(text))).toBe(true);
+    const [sent] = test.adapter.sent;
+    expect(updates[0]?.target).toEqual({
+      address: "thread-1",
+      replyContext: { ts: "1" },
+      idempotencyKey: sent?.ctx.idempotencyKey,
+    });
+    await harness.close(context);
+  });
+
+  it("reports a run the adapter cancels as stopped", async () => {
+    const held: { gate?: ReturnType<typeof gate> } = { gate: gate() };
+    const test = setup({
+      extensions: [holdTool(held)],
+      respond: () =>
+        fauxAssistantMessage(fauxToolCall("work", {}), {
+          stopReason: "toolUse",
+        }),
+    });
+    const { updates, started } = withProgress(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("start", "evt-1"));
+    await eventually(() => updates.length > 0);
+    const cancelled = started.cancel?.("thread-1");
+    held.gate?.open();
+    await cancelled;
+    await harness.waitForIdle(context);
+    await eventually(() =>
+      updates.some(({ update }) => update.type === "stopped"),
+    );
+    expect(updates.map(({ update }) => update)).toEqual([
+      { type: "working" },
+      { type: "stopped", reason: "aborted" },
+    ]);
+    expect(test.adapter.sent).toEqual([]);
+    await harness.close(context);
+  });
+
+  it("reports nothing for channels without progress", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    expect(test.adapter.sent).toHaveLength(1);
     await harness.close(context);
   });
 });
