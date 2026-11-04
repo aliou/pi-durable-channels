@@ -287,7 +287,7 @@ describe("slack channel end to end", () => {
     await harness.close(context);
   });
 
-  it("answers a direct message with files, showing its tool calls as steps before the answer", async () => {
+  it("answers a direct message with files, showing its narration between its tool calls as steps before the answer", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "slack-env-"));
     directories.push(cwd);
     const env = new NodeExecutionEnv({ cwd });
@@ -296,16 +296,22 @@ describe("slack channel end to end", () => {
       env: () => env,
       faux: { tokensPerSecond: 200, tokenSize: { min: 1, max: 1 } },
       extensions: [lookTool],
-      respond: (transcript) =>
-        transcript.messages.at(-1)?.role === "user"
-          ? fauxAssistantMessage(
-              [
-                fauxText("Let me look."),
-                fauxToolCall("look", { file: "report.pdf" }),
-              ],
-              { stopReason: "toolUse" },
-            )
-          : fauxAssistantMessage(reply),
+      respond: (transcript) => {
+        const looked = transcript.messages.filter(
+          ({ role }) => role === "toolResult",
+        ).length;
+        const turns = [
+          ["Let me look.", "report.pdf"],
+          ["Now the picture.", "cat.png"],
+        ];
+        const [text, file] = turns[looked] ?? [];
+        if (text === undefined || file === undefined)
+          return fauxAssistantMessage(reply);
+        return fauxAssistantMessage(
+          [fauxText(text), fauxToolCall("look", { file })],
+          { stopReason: "toolUse" },
+        );
+      },
     });
     await hub.start();
     const file = (name: string, mimetype: string) => ({
@@ -365,31 +371,35 @@ describe("slack channel end to end", () => {
       channel: "D1",
       thread_ts: "200.000100",
       text: "Working…",
-      blocks: [
-        {
-          type: "plan",
-          tasks: [
-            {
-              title: "look report.pdf",
-              details: {
-                type: "rich_text",
-                elements: [
-                  {
-                    type: "rich_text_section",
-                    elements: [{ type: "text", text: "Let me look." }],
-                  },
-                ],
-              },
-            },
-          ],
-        },
-      ],
+      blocks: [{ type: "plan" }],
     });
     const updates = calls.filter(({ method }) => method === "chat.update");
-    expect(updates.at(-1)?.body).toMatchObject({
-      text: "Done: 1 step",
-      blocks: [{ title: "Done: 1 step", tasks: [{ status: "complete" }] }],
+    const done = updates.at(-1)?.body;
+    expect(done).toMatchObject({
+      text: "Done: 2 steps",
+      blocks: [{ title: "Done: 2 steps" }],
     });
+    const narration = (text: string) => ({
+      title: text,
+      status: "complete",
+      hide_title: true,
+      details: {
+        type: "rich_text",
+        elements: [
+          { type: "rich_text_section", elements: [{ type: "text", text }] },
+        ],
+      },
+    });
+    const tool = (title: string) => ({ title, status: "complete" });
+    const [block] = (done?.blocks ?? []) as {
+      tasks: Record<string, unknown>[];
+    }[];
+    expect(block?.tasks.map(({ task_id: _, ...task }) => task)).toEqual([
+      narration("Let me look."),
+      tool("look report.pdf"),
+      narration("Now the picture."),
+      tool("look cat.png"),
+    ]);
     expect(answer).toEqual({
       channel: "D1",
       markdown_text: reply,

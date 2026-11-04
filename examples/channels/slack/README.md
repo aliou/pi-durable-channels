@@ -2,7 +2,7 @@
 
 A Slack adapter. Messages arrive over Socket Mode or the Events API. Each thread is one conversation, in channels and
 DMs, and an agent session with Slack's "Working…" status, stop button, and title. While the agent works, its tool calls
-show as steps in a folded plan ("Done: 12 steps ›"), and the answer follows as its own message.
+and its narration between them show in a folded plan ("Done: 12 steps ›"), and the answer follows as its own message.
 
 ```ts
 import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
@@ -84,12 +84,13 @@ inbound event
 
 events(target, event) (reply.ts)
   run_started   → agents.sessions.setStatus processing, with the request as the title of a new session (session.ts)
-  text          → kept as the details of the next step
-  tool_started  → first step: chat.postMessage in the thread with a plan block titled "Working…" (plan.ts)
-                  later steps: chat.update, at most every 2 s; one task per tool call, titled from its name and first
-                  string argument; past 50 tasks, the middle folds into "… N more steps"
+  text          → a complete task with its title hidden and the narration as its details, before the call it explains
+  tool_started  → a task in progress, titled from the tool's name and first string argument
+                  the first task: chat.postMessage in the thread with a plan block titled "Working…" (plan.ts)
+                  later tasks: chat.update, at most every 2 s; past 50 tasks, the middle folds into "… N more steps"
   tool_finished → the step's task complete or error
-  run_ended     → failed or aborted: plan titled "Stopped after N steps" or "Failed after N steps", session active
+  run_ended     → failed or aborted: plan titled "Stopped after N steps" or "Failed after N steps" (N counts tool
+                  calls), session active
                   (aborted) or suspended; completed: nothing, send already finished the plan
 
 send(reply, ctx) (reply.ts)
@@ -107,8 +108,8 @@ send(reply, ctx) (reply.ts)
   thread, and the key keeps pointing at it. Until then there is no thread, so no plan and no session.
 - **Posted, not streamed.** Steps live in a posted message that is updated, so runs longer than Slack's 10-minute
   stream limit work, and so do threads without a known recipient. A run without tool calls posts only its answer.
-- **The answer is posted whole.** Text the model writes before a tool call is narration, shown in that step's details,
-  never mixed into the answer.
+- **The answer is posted whole.** Text the model writes next to a tool call is narration, shown as its own
+  entry between the steps, never mixed into the answer.
 - **Files.** Downloads send the bot token to `https://files.slack.com` only, with no redirects, a 30 s timeout, and a
   50 MiB limit (`maxFileBytes`). Files shared from Google Drive and similar stay links in the text.
 - **Fixed origins.** API calls go to `https://slack.com/api` with no redirects and a 30 s timeout. `apiUrl` and
@@ -124,7 +125,7 @@ send(reply, ctx) (reply.ts)
 
 `test/` covers event mapping, signature checks, and address parsing (`events.test.ts`), file downloads
 (`files.test.ts`), and through a real harness against a local fake Slack API (`slack.test.ts`): a case thread, a DM
-with an image and a PDF saved in the conversation's environment, its tool call as a plan step, and the answer after it,
+with an image and a PDF saved in the conversation's environment, its narration and tool calls as plan tasks, and the answer after them,
 session naming and a person's rename, a thread where the agent declines with `no_reply`, and the stop button.
 Socket Mode runs against a local WebSocket server: `start` waits for `hello`, a bad bot token or a refused
 `apps.connections.open` rejects it, and an event in flight at stop is acked before the socket closes.

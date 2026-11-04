@@ -17,6 +17,7 @@ export type PlanStep = {
   title: string;
   status: "in_progress" | "complete" | "error";
   details?: string;
+  narration?: boolean;
 };
 
 export type PlanOutcome = "done" | "stopped" | "failed";
@@ -49,6 +50,16 @@ export function titleOf(name: string, args: unknown): string {
   return typeof first === "string" ? oneLine(`${name} ${first}`) : name;
 }
 
+export function narrationStep(id: string, text: string): PlanStep {
+  return {
+    id,
+    title: oneLine(text),
+    status: "complete",
+    details: text,
+    narration: true,
+  };
+}
+
 function richText(text: string) {
   const cut =
     text.length > MAX_DETAILS ? `${text.slice(0, MAX_DETAILS)}…` : text;
@@ -65,6 +76,7 @@ function taskOf(step: PlanStep) {
     task_id: step.id,
     title: step.title,
     status: step.status,
+    ...(step.narration === true ? { hide_title: true } : {}),
     ...(step.details === undefined ? {} : { details: richText(step.details) }),
   };
 }
@@ -151,7 +163,7 @@ export function createPlans(
     const plan = plans.get(key);
     const known = plan?.steps.get(id);
     if (plan === undefined || known === undefined) return;
-    step(key, plan.thread, { id, title: known.title, status });
+    step(key, plan.thread, { ...known, status });
   }
 
   function markFinished(key: string): void {
@@ -174,7 +186,8 @@ export function createPlans(
     const plan = await take(key);
     if (plan === undefined) return;
     settle(plan.steps, outcome);
-    plan.title = TITLES[outcome](plan.steps.size);
+    const tools = [...plan.steps.values()].filter((step) => !step.narration);
+    plan.title = TITLES[outcome](tools.length);
     await flush(plan);
   }
 

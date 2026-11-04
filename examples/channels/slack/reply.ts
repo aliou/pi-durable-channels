@@ -8,7 +8,7 @@ import type {
 import { compile, obj, opt, str } from "@earendil-works/pi-schema";
 import type { SlackCall } from "./api";
 import type { Naming } from "./naming";
-import { createPlans, titleOf } from "./plan";
+import { createPlans, narrationStep, titleOf } from "./plan";
 import { type SessionStatus, setSessionStatus } from "./session";
 import { slackTarget, type Thread, threadOf } from "./target";
 
@@ -85,8 +85,6 @@ export function slackReplies(
     return result;
   }
 
-  const narration = new Map<string, string>();
-
   function started(target: ReplyTarget, thread: Thread) {
     const requester = requesterOf(target.replyContext);
     const title = naming.initial(requester?.request);
@@ -96,29 +94,11 @@ export function slackReplies(
     });
   }
 
-  function toolStarted(
-    key: string,
-    thread: Thread,
-    name: string,
-    id: string,
-    args: unknown,
-  ) {
-    const details = narration.get(key);
-    narration.delete(key);
-    plans.step(key, thread, {
-      id,
-      title: titleOf(name, args),
-      status: "in_progress",
-      ...(details === undefined ? {} : { details }),
-    });
-  }
-
   async function ended(
     key: string,
     thread: Thread,
     outcome: "completed" | "failed" | "aborted",
   ) {
-    narration.delete(key);
     if (outcome === "completed") return;
     const failed = outcome === "failed";
     await plans
@@ -138,10 +118,13 @@ export function slackReplies(
       case "run_started":
         return started(target, thread);
       case "text":
-        narration.set(key, event.text);
-        return;
+        return plans.step(key, thread, narrationStep(event.id, event.text));
       case "tool_started":
-        return toolStarted(key, thread, event.name, event.id, event.args);
+        return plans.step(key, thread, {
+          id: event.id,
+          title: titleOf(event.name, event.args),
+          status: "in_progress",
+        });
       case "tool_finished":
         return plans.finishStep(
           key,
