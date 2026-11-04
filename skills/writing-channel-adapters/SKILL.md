@@ -12,13 +12,14 @@ An adapter connects one platform to the channels core. The core owns conversatio
 ```ts
 type ChannelAdapter = {
   start?(ctx: { deliver: Deliver; cancel(address: string): Promise<void>; signal: AbortSignal }): void | Promise<void>;
+  fetch?(request: Request): Promise<Response>;
   send(message: OutboundMessage, ctx: SendContext): Promise<SendResult | undefined | void>;
   progress?(target: ReplyTarget, update: ReplyProgress): void | Promise<void>;
   fetchFile?(url: string): Promise<Uint8Array>;
 };
 ```
 
-- `start` runs once from `hub.start(signal)`. Open sockets, watchers, or pollers here and stop them when `signal` aborts. An HTTP adapter keeps `deliver` and exposes its own `fetch(request): Promise<Response>` for the host to mount; answer 503 until `start` ran.
+- `start` runs once from `hub.start(signal)`. Open sockets, watchers, or pollers here and stop them when `signal` aborts. An HTTP adapter keeps `deliver` and implements `fetch`, the one HTTP entry point a host mounts for any adapter; answer 503 until `start` ran. Socket and polling adapters leave `fetch` out.
 - `deliver(message, { whenBusy?, run?, create? })` admits one inbound message. It resolves to a receipt, or to `undefined` when no conversation takes the address. `run: false` stores the message as context without a run or a reply, and never creates a conversation. `create: false` runs the message only on an address that already has a conversation; use it for chatter the agent may join but should never start a conversation from.
 - `send` posts one outbound message: a reply, or a `send_message` notification. Throwing retries it with backoff and the same `idempotencyKey`. A reply with no parts means the run chose not to answer (`no_reply`): post nothing, and clear any typing indicator, stream, or session status.
 - `cancel(address)` stops the run of the conversation bound to `address`, as `hub.cancel` does. Map a platform stop button to it.

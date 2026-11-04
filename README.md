@@ -74,14 +74,15 @@ conversation runs (queue or steer, model, tools)
 ```ts
 type ChannelAdapter = {
   start?(ctx: { deliver; cancel; signal }): void | Promise<void>;
+  fetch?(request): Promise<Response>;
   send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
   progress?(target, update): void | Promise<void>;
   fetchFile?(url): Promise<Uint8Array>;
 };
 ```
 
-`start` opens the adapter's inbound transport and keeps `deliver` and `cancel`. HTTP adapters expose a
-`fetch(request)` the host mounts. `progress` drives typing indicators, session status, or a timeline of tool calls. `fetchFile`
+`start` opens the adapter's inbound transport and keeps `deliver` and `cancel`. HTTP adapters implement `fetch`, which
+the host mounts at a URL of its choosing; socket and polling adapters leave it out. `progress` drives typing indicators, session status, or a timeline of tool calls. `fetchFile`
 downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
 the host's `env` builder: `channels.hub(harness, { env })`. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and
 testing.
