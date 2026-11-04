@@ -23,22 +23,24 @@ function textOf(message: OutboundMessage): string {
     .join("");
 }
 
-function report(what: string) {
-  return (error: unknown) => console.error(`slack ${what}`, error);
-}
-
 function requesterOf(context: unknown) {
   return Requester.check(context) ? context : undefined;
 }
 
-export function slackReplies(call: SlackCall, naming: Naming) {
-  const plans = createPlans(call, report("plan"));
+export type ReportError = (thread?: Thread) => (error: unknown) => void;
+
+export function slackReplies(
+  call: SlackCall,
+  naming: Naming,
+  reportError: ReportError,
+) {
+  const plans = createPlans(call, reportError);
 
   const status = (
     thread: Thread,
     value: SessionStatus,
     start?: Parameters<typeof setSessionStatus>[3],
-  ) => setSessionStatus(call, thread, value, start).catch(report("session"));
+  ) => setSessionStatus(call, thread, value, start).catch(reportError(thread));
 
   async function post(
     message: OutboundMessage,
@@ -61,7 +63,7 @@ export function slackReplies(call: SlackCall, naming: Naming) {
   }
 
   async function decline(thread: Thread | undefined, key: string) {
-    await plans.discard(key).catch(report("plan"));
+    await plans.discard(key).catch(reportError(thread));
     if (thread !== undefined) await status(thread, "active");
   }
 
@@ -75,7 +77,7 @@ export function slackReplies(call: SlackCall, naming: Naming) {
       await decline(thread, ctx.idempotencyKey);
       return undefined;
     }
-    await plans.finish(ctx.idempotencyKey, "done").catch(report("plan"));
+    await plans.finish(ctx.idempotencyKey, "done").catch(reportError(thread));
     const result = await post(message, text, ctx);
     const request = requesterOf(ctx.replyContext)?.request;
     if (thread !== undefined && request !== undefined)
@@ -121,7 +123,7 @@ export function slackReplies(call: SlackCall, naming: Naming) {
     const failed = outcome === "failed";
     await plans
       .finish(key, failed ? "failed" : "stopped")
-      .catch(report("plan"));
+      .catch(reportError(thread));
     await status(thread, failed ? "suspended" : "active");
   }
 

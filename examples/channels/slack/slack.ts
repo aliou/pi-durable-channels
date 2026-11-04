@@ -11,6 +11,7 @@ import {
 import { fetchSlackFile } from "./files";
 import { createNaming, type NameThread } from "./naming";
 import { slackReplies } from "./reply";
+import type { Thread } from "./target";
 import {
   listenSocket,
   type OnEvent,
@@ -24,7 +25,6 @@ export type SlackOptions = {
   threadMessages?: ThreadMessages;
   nameThread?: NameThread;
   maxFileBytes?: number;
-  debug?: boolean;
   apiUrl?: string;
   filesUrl?: string;
   maxBodyBytes?: number;
@@ -41,10 +41,17 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
   const apiUrl = options.apiUrl ?? SLACK_API;
   const call = slackApi(options.botToken, apiUrl);
   const { transport } = options;
-  const naming = createNaming(call, options.nameThread, (error) =>
-    console.error("slack naming", error),
-  );
-  const replies = slackReplies(call, naming);
+  let report: AdapterStart["report"] = () => undefined;
+  const reportError = (thread?: Thread) => (error: unknown) =>
+    report({
+      kind: "adapter_error",
+      error,
+      ...(thread === undefined
+        ? {}
+        : { address: `${thread.channel}:${thread.threadTs}` }),
+    });
+  const naming = createNaming(call, options.nameThread, reportError);
+  const replies = slackReplies(call, naming, reportError);
   const files = {
     botToken: options.botToken,
     origin: options.filesUrl ?? SLACK_FILES,
@@ -75,13 +82,13 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
         await ctx.deliver(inbound.message, inbound.options);
         return;
       }
-      if (options.debug === true)
-        console.error("slack skipped", describeEvent(event));
+      ctx.report({ kind: "skipped", detail: describeEvent(event) });
     };
   }
 
   return {
     start: async (ctx) => {
+      report = ctx.report;
       const auth = await call("auth.test", {}, ctx.signal);
       if (!Auth.check(auth))
         throw new Error("Slack auth.test returned no user_id");
@@ -92,6 +99,7 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
           apiUrl,
           appToken: transport.appToken,
           onEvent,
+          onError: reportError(),
           signal: ctx.signal,
         });
     },

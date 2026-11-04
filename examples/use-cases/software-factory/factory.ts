@@ -1,6 +1,7 @@
 import {
   type ChannelAdapter,
   type Channels,
+  type ChannelsOptions,
   createChannels,
 } from "@aliou/pi-durable-channels";
 import {
@@ -24,6 +25,7 @@ export type FactoryOptions = {
   instructions: { build: string; triage: string };
   labels: readonly string[];
   observers?: readonly Extension[];
+  onReport?: ChannelsOptions["onReport"];
 };
 
 export type Factory = { channels: Channels; extensions: Extension[] };
@@ -56,6 +58,7 @@ export function softwareFactory(options: FactoryOptions): Factory {
             : undefined,
       },
     },
+    onReport: options.onReport,
   });
   const build = buildTools({
     call,

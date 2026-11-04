@@ -1,4 +1,4 @@
-import { createChannels } from "@aliou/pi-durable-channels";
+import { type ChannelReport, createChannels } from "@aliou/pi-durable-channels";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createModels,
@@ -41,7 +41,11 @@ async function open(routes: Parameters<typeof fakeGitHub>[0] = {}) {
     webhookSecret: "github-webhook-secret",
     apiUrl: api.apiUrl,
   });
+  const reports: ChannelReport[] = [];
   const channels = createChannels({
+    onReport: (report) => {
+      reports.push(report);
+    },
     channels: {
       github: {
         adapter: github,
@@ -74,7 +78,7 @@ async function open(routes: Parameters<typeof fakeGitHub>[0] = {}) {
     context,
   );
   const hub = channels.hub(harness);
-  return { github: served(github), hub, harness, seen, ...api };
+  return { github: served(github), hub, harness, seen, reports, ...api };
 }
 
 const comments = (calls: Call[]) =>
@@ -92,6 +96,20 @@ describe("github channel end to end", () => {
     await hub.start();
     const forged = await github(webhook("ping", {}, { secret: "other" }));
     expect(forged.status).toBe(401);
+    await harness.close(context);
+  });
+
+  it("reports the events it skips", async () => {
+    const { github, hub, harness, reports } = await open();
+    await hub.start();
+    await github(webhook("ping", {}, { delivery: "d0" }));
+    const bot = payloads.comment(3, "deployed");
+    bot.comment.user.type = "Bot";
+    await github(webhook("issue_comment", bot, { delivery: "d1" }));
+    expect(reports).toEqual([
+      { kind: "skipped", channel: "github", detail: "ping d0" },
+      { kind: "skipped", channel: "github", detail: "issue_comment d1" },
+    ]);
     await harness.close(context);
   });
 

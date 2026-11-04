@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createChannels } from "@aliou/pi-durable-channels";
+import { type ChannelReport, createChannels } from "@aliou/pi-durable-channels";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   type AssistantMessage,
@@ -129,6 +129,7 @@ async function open(options: OpenOptions = {}) {
     threadMessages: options.threadMessages,
     nameThread: options.nameThread,
   });
+  const reports: ChannelReport[] = [];
   const channels = createChannels({
     channels: {
       slack: {
@@ -137,6 +138,9 @@ async function open(options: OpenOptions = {}) {
           agent: { model: { provider: "faux", modelId: "faux-1" } },
         }),
       },
+    },
+    onReport: (report) => {
+      reports.push(report);
     },
   });
   const seen: Seen = { texts: [], images: [] };
@@ -169,7 +173,7 @@ async function open(options: OpenOptions = {}) {
   const post = served(slack);
   const event = (body: Record<string, unknown>) =>
     post(signed({ type: "event_callback", team_id: "T1", event: body }));
-  return { post, hub, harness, seen, event, ...slackApi };
+  return { post, hub, harness, seen, event, reports, ...slackApi };
 }
 
 const posts = (calls: Call[]) =>
@@ -187,6 +191,22 @@ describe("slack channel end to end", () => {
     const { post, harness } = await open();
     const response = await post(signed({ type: "url_verification" }));
     expect(response.status).toBe(503);
+    await harness.close(context);
+  });
+
+  it("reports the events it skips", async () => {
+    const { hub, harness, event, reports } = await open();
+    await hub.start();
+    await event(message({ bot_id: "B1", subtype: "bot_message" }));
+    await event(message({ ts: "300.1", text: "no mention" }));
+    expect(reports).toEqual([
+      {
+        kind: "skipped",
+        channel: "slack",
+        detail: "message/bot_message C1 200.000100 from a bot",
+      },
+      { kind: "skipped", channel: "slack", detail: "message C1 300.1" },
+    ]);
     await harness.close(context);
   });
 

@@ -48,6 +48,7 @@ export function listenSocket(socket: {
   apiUrl: string;
   appToken: string;
   onEvent: OnEvent;
+  onError(error: unknown): void;
   signal: AbortSignal;
 }): void {
   const open = slackApi(socket.appToken, socket.apiUrl);
@@ -61,6 +62,7 @@ export function listenSocket(socket: {
     onPayload: async (payload) => {
       if (EventCallback.check(payload)) await socket.onEvent(payload.event);
     },
+    onError: socket.onError,
     signal: socket.signal,
   });
 }

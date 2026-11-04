@@ -59,8 +59,8 @@ inbound event
   agent_session_stopped → cancel(<channel>:<thread ts>) → the run aborts
   agent_session_title_changed → never rename that thread again (naming.ts)
   message → inboundOf(event) (events.ts)
-    bot messages, edits, and subtypes other than file_share → skip
-    top-level channel message without a mention → skip
+    bot messages, edits, and subtypes other than file_share → report skipped
+    top-level channel message without a mention → report skipped
     text: Slack's &amp; &lt; &gt; escapes decoded; mentions keep their <@U…> form
     address = <channel>:<thread ts, or the message ts for a new thread>
     requestId = slack:<channel>:<message ts>
@@ -108,8 +108,9 @@ send(reply, ctx) (reply.ts)
 - **At least once.** A crash between Slack accepting a post and the send task recording it posts again on restart. A
   crash mid-run leaves the plan message as it was, and the reply posts in full.
 - **Long answers.** Text is cut at Slack's 12,000-character `markdown_text` limit.
-- **Debugging.** `debug: true` logs one line per event the adapter skips. Failed status, plan, and naming calls always
-  log.
+- **Reports, not logs.** The adapter writes nothing to the console. Each event it skips reaches the host's `onReport`
+  as `skipped`, with a one-line description. Failed status, plan, naming, and Socket Mode calls arrive as
+  `adapter_error`, with the thread's address when there is one.
 
 ## Tests
 

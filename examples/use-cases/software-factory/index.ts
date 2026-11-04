@@ -6,7 +6,7 @@ import {
   githubChannel,
   personalToken,
 } from "@examples/github-channel";
-import { activityLog, logged } from "@examples/shared/log";
+import { activityLog, logged, logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, run } from "@examples/shared/run";
 import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
@@ -85,13 +85,13 @@ const slack = slackChannel({
     model,
     await readFile(new URL("title.md", import.meta.url), "utf8"),
   ),
-  debug: true,
 });
-const github = githubChannel({ auth, webhookSecret, debug: true });
+const github = githubChannel({ auth, webhookSecret });
 const factory = softwareFactory({
   slack: logged("slack", slack),
   github: logged("github", github),
   observers: [activityLog],
+  onReport: logReport,
   call: githubApi(auth.token),
   repo,
   workspace,

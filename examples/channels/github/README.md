@@ -43,7 +43,7 @@ github.fetch(request)
     pull_request_review_comment.created → skipped; every line comment belongs to a review, and GitHub may
                                           deliver it after the review
     workflow_run.completed, failure     → one message per pull request, whenBusy: "steer"
-    anything else, and anything by its own login or by bots → skipped
+    anything else, and anything by its own login or by bots → report skipped, "<event> <delivery>"
     requestId = github:<delivery>[:<pull request>]
   deliver(message, options) for each → 202
     unbound address and the factory returns undefined → ignored, still 202
@@ -60,7 +60,8 @@ send(reply)
 - **Two kinds of auth.** `appInstallation` signs a JWT with the app's private key, finds the app's installation on the
   repository, and mints installation tokens, reused until five minutes before they expire. `personalToken` sends one
   token as is. `githubApi(auth.token)` gives host code, such as tools, the same authenticated client.
-- **Debugging.** `debug: true` logs every event the adapter skips.
+- **Reports, not logs.** The adapter writes nothing to the console. A delivery that maps to no message reaches the
+  host's `onReport` as `skipped`.
 - **Fixed origin.** API calls go to `https://api.github.com` with no redirects and a 30 s timeout. `apiUrl` exists
   for tests and GitHub Enterprise.
 

@@ -14,6 +14,7 @@ const Frame = compile(
 export type SocketModeOptions = {
   open(): Promise<string>;
   onPayload(payload: unknown): Promise<void>;
+  onError(error: unknown): void;
   signal: AbortSignal;
 };
 
@@ -39,7 +40,7 @@ async function connect(url: string, options: SocketModeOptions): Promise<void> {
   options.signal.addEventListener("abort", close, { once: true });
   socket.addEventListener("message", (event) => {
     handleFrame(socket, String(event.data), options.onPayload).catch(
-      (error: unknown) => console.error("slack event not delivered", error),
+      options.onError,
     );
   });
   await new Promise((resolve) => socket.addEventListener("close", resolve));
@@ -53,9 +54,7 @@ async function openAndConnect(options: SocketModeOptions): Promise<void> {
 
 export async function runSocketMode(options: SocketModeOptions): Promise<void> {
   while (!options.signal.aborted) {
-    await openAndConnect(options).catch((error: unknown) =>
-      console.error("slack socket mode", error),
-    );
+    await openAndConnect(options).catch(options.onError);
     await delay(RECONNECT_MS, undefined, { signal: options.signal }).catch(
       () => undefined,
     );

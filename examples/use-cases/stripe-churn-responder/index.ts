@@ -3,6 +3,7 @@ import {
   type ChannelAdapter,
   createChannels,
 } from "@aliou/pi-durable-channels";
+import { logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, type Route, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
@@ -64,6 +65,7 @@ const channels = createChannels({
       }),
     },
   },
+  onReport: logReport,
 });
 
 const routes: Record<string, Route> = {

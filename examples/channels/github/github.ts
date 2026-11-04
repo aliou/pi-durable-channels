@@ -1,4 +1,5 @@
 import type {
+  AdapterStart,
   ChannelAdapter,
   Deliver,
   OutboundMessage,
@@ -25,7 +26,6 @@ export type GitHubOptions = {
   webhookSecret: string;
   apiUrl?: string;
   maxBodyBytes?: number;
-  debug?: boolean;
 };
 
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
@@ -46,7 +46,11 @@ const ReviewComments = compile(
   ),
 );
 
-type Receiver = { deliver: Deliver; self: string };
+type Receiver = {
+  deliver: Deliver;
+  report: AdapterStart["report"];
+  self: string;
+};
 
 function textOf(message: OutboundMessage): string {
   return message.parts
@@ -90,8 +94,8 @@ export function githubChannel(options: GitHubOptions): ChannelAdapter {
     if (delivery === "" || payload === undefined)
       return new Response("Bad Request", { status: 400 });
     const inbounds = inboundOf({ name, delivery, payload }, to.self);
-    if (inbounds.length === 0 && options.debug === true)
-      console.error("github skipped", name, delivery);
+    if (inbounds.length === 0)
+      to.report({ kind: "skipped", detail: `${name} ${delivery}` });
     for (const inbound of inbounds) {
       const message = await withReviewComments(inbound);
       await to.deliver(message, inbound.options);
@@ -112,7 +116,7 @@ export function githubChannel(options: GitHubOptions): ChannelAdapter {
   return {
     start: async (ctx) => {
       const self = await options.auth.login(ctx.signal);
-      receiver = { deliver: ctx.deliver, self };
+      receiver = { deliver: ctx.deliver, report: ctx.report, self };
     },
     fetch: async (request) =>
       receiver === undefined

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { createChannels } from "@aliou/pi-durable-channels";
+import { logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
@@ -34,6 +35,7 @@ const channels = createChannels({
       }),
     },
   },
+  onReport: logReport,
 });
 
 await run({

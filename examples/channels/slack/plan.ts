@@ -93,7 +93,7 @@ function settle(steps: Map<string, PlanStep>, outcome: PlanOutcome): void {
 
 export function createPlans(
   call: SlackCall,
-  onError: (error: unknown) => void,
+  onError: (thread: Thread) => (error: unknown) => void,
 ) {
   const plans = new Map<string, Plan>();
   const finished = new Set<string>();
@@ -119,7 +119,7 @@ export function createPlans(
   }
 
   function queue(plan: Plan): void {
-    plan.chain = plan.chain.then(() => flush(plan)).catch(onError);
+    plan.chain = plan.chain.then(() => flush(plan)).catch(onError(plan.thread));
   }
 
   function step(key: string, thread: Thread, value: PlanStep): void {

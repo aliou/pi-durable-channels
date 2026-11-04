@@ -37,7 +37,7 @@ function initial(request: string | undefined): string | undefined {
 export function createNaming(
   call: SlackCall,
   nameThread: NameThread | undefined,
-  onError: (error: unknown) => void,
+  onError: (thread: Thread) => (error: unknown) => void,
 ): Naming {
   const settled = new Set<string>();
 
@@ -52,7 +52,7 @@ export function createNaming(
     answered: (thread, request, answer) => {
       if (nameThread === undefined || settled.has(key(thread))) return;
       settled.add(key(thread));
-      void rename(thread, request, answer).catch(onError);
+      void rename(thread, request, answer).catch(onError(thread));
     },
     renamedByUser: (thread) => {
       settled.add(key(thread));

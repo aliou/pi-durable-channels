@@ -23,7 +23,7 @@ Runnable agents built on the channels.
 | `@examples/software-factory` | `use-cases/software-factory/` | Coding agents: Slack requests become pull requests they follow; new issues get triaged |
 
 `use-cases/shared/` (`@examples/shared`) holds what the use cases have in common: the runner, which serves
-any HTTP adapter through `adapterRoute(adapter)`, the model loader, and the console or HTTP sink. Channel packages depend on nothing here, so each one can be copied on its own.
+any HTTP adapter through `adapterRoute(adapter)`, `logReport` for channel reports, the model loader, and the console or HTTP sink. Channel packages depend on nothing here, so each one can be copied on its own.
 
 ```sh
 nix develop -c pnpm install

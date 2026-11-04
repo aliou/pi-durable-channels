@@ -1,6 +1,7 @@
 import type {
   AdapterStart,
   ChannelAdapter,
+  ChannelReport,
   OutboundMessage,
 } from "@aliou/pi-durable-channels";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -26,6 +27,15 @@ function log(scope: string, ...parts: unknown[]): void {
 }
 
 const conversation = (id: ConversationId) => `[c${id}]`;
+
+export function logReport(report: ChannelReport): void {
+  const { kind, channel, ...details } = report;
+  const shown = Object.entries(details).map(
+    ([key, value]) =>
+      `${key}=${value instanceof Error ? value.message : preview(value)}`,
+  );
+  log(`[${channel}]`, kind, ...shown);
+}
 
 function describeResponse(message: AssistantMessage): string {
   const parts = message.content.flatMap((part) => {
@@ -117,7 +127,7 @@ export function logged(
   return {
     ...adapter,
     start,
-    send: async (message, ctx) => {
+    send: (message, ctx) => {
       log(
         `[${channel}]`,
         "out",
@@ -125,17 +135,7 @@ export function logged(
         ctx.idempotencyKey,
         preview(textOf(message)),
       );
-      try {
-        return await adapter.send(message, ctx);
-      } catch (error) {
-        log(
-          `[${channel}]`,
-          "send failed",
-          message.address,
-          error instanceof Error ? error.message : error,
-        );
-        throw error;
-      }
+      return adapter.send(message, ctx);
     },
   };
 }
