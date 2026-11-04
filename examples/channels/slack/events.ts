@@ -1,4 +1,8 @@
-import type { InboundFile, InboundMessage } from "@aliou/pi-durable-channels";
+import type {
+  DeliverOptions,
+  InboundFile,
+  InboundMessage,
+} from "@aliou/pi-durable-channels";
 import {
   arr,
   compile,
@@ -9,6 +13,7 @@ import {
   str,
   unknown,
 } from "@earendil-works/pi-schema";
+import type { Thread } from "./target";
 
 const SlackFile = obj(
   {
@@ -20,19 +25,30 @@ const SlackFile = obj(
   { open: true },
 );
 
-const UserMessage = compile(
+const UserMessageShape = obj(
+  {
+    type: lit("message"),
+    user: str(),
+    text: str(),
+    channel: str(),
+    ts: str(),
+    thread_ts: opt(str()),
+    channel_type: opt(str()),
+    subtype: opt(str()),
+    bot_id: opt(unknown()),
+    files: opt(arr(SlackFile)),
+  },
+  { open: true },
+);
+
+const UserMessage = compile(UserMessageShape);
+
+const TitleChanged = compile(
   obj(
     {
-      type: lit("message"),
-      user: str(),
-      text: str(),
+      type: lit("agent_session_title_changed"),
       channel: str(),
-      ts: str(),
-      thread_ts: opt(str()),
-      channel_type: opt(str()),
-      subtype: opt(str()),
-      bot_id: opt(unknown()),
-      files: opt(arr(SlackFile)),
+      thread_ts: str(),
     },
     { open: true },
   ),
@@ -45,9 +61,23 @@ const SessionStopped = compile(
   ),
 );
 
-export type SlackInbound = { message: InboundMessage; run: boolean };
+export type SlackInbound = { message: InboundMessage; options: DeliverOptions };
 
-export type Recipient = { user: string; team?: string };
+export type ThreadMessages = "context" | "run";
+
+export type InboundSettings = {
+  botUserId: string;
+  threadMessages?: ThreadMessages;
+};
+
+const THREAD_MESSAGES: Readonly<Record<ThreadMessages, DeliverOptions>> = {
+  context: { run: false },
+  run: { run: true, create: false },
+};
+
+export type Requester = { user: string; request: string };
+
+const MAX_REQUEST = 500;
 
 const USER_SUBTYPES = new Set<string | undefined>([undefined, "file_share"]);
 
@@ -67,29 +97,47 @@ function filesOf(
   );
 }
 
+function deliverOptions(
+  event: Static<typeof UserMessageShape>,
+  settings: InboundSettings,
+): DeliverOptions | undefined {
+  if (event.channel_type === "im") return {};
+  if (event.text.includes(`<@${settings.botUserId}>`)) return {};
+  if (event.thread_ts === undefined) return undefined;
+  return THREAD_MESSAGES[settings.threadMessages ?? "context"];
+}
+
+function unescapeText(text: string): string {
+  return text
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 export function inboundOf(
   event: unknown,
-  botUserId: string,
-  team?: string,
+  settings: InboundSettings,
 ): SlackInbound | undefined {
   if (!UserMessage.check(event)) return undefined;
   if (!USER_SUBTYPES.has(event.subtype)) return undefined;
   if (event.bot_id !== undefined) return undefined;
-  const direct = event.channel_type === "im";
-  const run = direct || event.text.includes(`<@${botUserId}>`);
-  if (event.thread_ts === undefined && !run) return undefined;
-  const recipient: Recipient =
-    team === undefined ? { user: event.user } : { user: event.user, team };
+  const options = deliverOptions(event, settings);
+  if (options === undefined) return undefined;
+  const text = unescapeText(event.text);
+  const requester: Requester = {
+    user: event.user,
+    request: text.slice(0, MAX_REQUEST),
+  };
   return {
     message: {
       address: `${event.channel}:${event.thread_ts ?? event.ts}`,
-      text: event.text,
+      text,
       requestId: `slack:${event.channel}:${event.ts}`,
       author: event.user,
-      replyContext: recipient,
+      replyContext: requester,
       files: filesOf(event.files),
     },
-    run,
+    options,
   };
 }
 
@@ -97,4 +145,30 @@ export function stoppedAddressOf(event: unknown): string | undefined {
   return SessionStopped.check(event)
     ? `${event.channel}:${event.thread_ts}`
     : undefined;
+}
+
+export function renamedThreadOf(event: unknown): Thread | undefined {
+  return TitleChanged.check(event)
+    ? { channel: event.channel, threadTs: event.thread_ts }
+    : undefined;
+}
+
+const AnyEvent = compile(
+  obj(
+    {
+      type: str(),
+      subtype: opt(str()),
+      channel: opt(str()),
+      ts: opt(str()),
+      bot_id: opt(unknown()),
+    },
+    { open: true },
+  ),
+);
+
+export function describeEvent(event: unknown): string {
+  if (!AnyEvent.check(event)) return "unknown event";
+  const kind = [event.type, event.subtype].filter(Boolean).join("/");
+  const from = event.bot_id === undefined ? "" : " from a bot";
+  return `${kind} ${event.channel ?? ""} ${event.ts ?? ""}${from}`.trim();
 }

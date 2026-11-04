@@ -1,11 +1,4 @@
-import {
-  compile,
-  lit,
-  obj,
-  opt,
-  str,
-  unknown,
-} from "@earendil-works/pi-schema";
+import { compile, lit, obj, str, unknown } from "@earendil-works/pi-schema";
 import { slackApi } from "./api";
 import { parseJson, readBody } from "./body";
 import { runSocketMode } from "./socket";
@@ -25,20 +18,14 @@ export const httpEvents = (signingSecret: string): SlackTransport => ({
   signingSecret,
 });
 
-export type OnEvent = (
-  event: unknown,
-  team: string | undefined,
-) => Promise<void>;
+export type OnEvent = (event: unknown) => Promise<void>;
 
 const Connection = compile(obj({ url: str() }, { open: true }));
 const UrlVerification = compile(
   obj({ type: lit("url_verification"), challenge: str() }, { open: true }),
 );
 const EventCallback = compile(
-  obj(
-    { type: lit("event_callback"), event: unknown(), team_id: opt(str()) },
-    { open: true },
-  ),
+  obj({ type: lit("event_callback"), event: unknown() }, { open: true }),
 );
 
 export async function receiveHttp(
@@ -53,7 +40,7 @@ export async function receiveHttp(
   const body = parseJson(raw);
   if (UrlVerification.check(body))
     return Response.json({ challenge: body.challenge });
-  if (EventCallback.check(body)) await http.onEvent(body.event, body.team_id);
+  if (EventCallback.check(body)) await http.onEvent(body.event);
   return new Response(null, { status: 200 });
 }
 
@@ -72,8 +59,7 @@ export function listenSocket(socket: {
       return opened.url;
     },
     onPayload: async (payload) => {
-      if (EventCallback.check(payload))
-        await socket.onEvent(payload.event, payload.team_id);
+      if (EventCallback.check(payload)) await socket.onEvent(payload.event);
     },
     signal: socket.signal,
   });

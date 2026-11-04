@@ -7,14 +7,15 @@ import type {
 } from "@aliou/pi-durable-channels";
 import { compile, obj, opt, str } from "@earendil-works/pi-schema";
 import type { SlackCall } from "./api";
+import type { Naming } from "./naming";
+import { createPlans } from "./plan";
 import { type SessionStatus, setSessionStatus } from "./session";
-import { createStreams } from "./stream";
 import { slackTarget, type Thread, threadOf } from "./target";
 
 const MAX_TEXT = 12_000;
 
 const Posted = compile(obj({ ts: str() }, { open: true }));
-const Recipient = compile(obj({ user: str(), team: opt(str()) }));
+const Requester = compile(obj({ user: str(), request: opt(str()) }));
 
 function textOf(message: OutboundMessage): string {
   return message.parts
@@ -26,17 +27,18 @@ function report(what: string) {
   return (error: unknown) => console.error(`slack ${what}`, error);
 }
 
-export function slackReplies(call: SlackCall) {
-  const streams = createStreams(call, report("stream"));
+function requesterOf(context: unknown) {
+  return Requester.check(context) ? context : undefined;
+}
 
-  const status = (thread: Thread, value: SessionStatus, initiator?: string) =>
-    setSessionStatus(call, thread, value, initiator).catch(report("session"));
+export function slackReplies(call: SlackCall, naming: Naming) {
+  const plans = createPlans(call, report("plan"));
 
-  const finishStream = (key: string, text: string) =>
-    streams.stop(key, { text, status: "active" }).catch((error: unknown) => {
-      report("stream")(error);
-      return false;
-    });
+  const status = (
+    thread: Thread,
+    value: SessionStatus,
+    start?: Parameters<typeof setSessionStatus>[3],
+  ) => setSessionStatus(call, thread, value, start).catch(report("session"));
 
   async function post(
     message: OutboundMessage,
@@ -58,14 +60,27 @@ export function slackReplies(call: SlackCall) {
     return { addressData: { threadTs: root }, alias: `${channel}:${root}` };
   }
 
+  async function decline(thread: Thread | undefined, key: string) {
+    await plans.discard(key).catch(report("plan"));
+    if (thread !== undefined) await status(thread, "active");
+  }
+
   async function send(
     message: OutboundMessage,
     ctx: SendContext,
   ): Promise<SendResult | undefined> {
     const text = textOf(message).slice(0, MAX_TEXT);
-    if (text.trim() === "") return undefined;
-    if (await finishStream(ctx.idempotencyKey, text)) return undefined;
-    return post(message, text, ctx);
+    const thread = threadOf({ ...message, addressData: ctx.addressData });
+    if (text.trim() === "") {
+      await decline(thread, ctx.idempotencyKey);
+      return undefined;
+    }
+    await plans.finish(ctx.idempotencyKey, "done").catch(report("plan"));
+    const result = await post(message, text, ctx);
+    const request = requesterOf(ctx.replyContext)?.request;
+    if (thread !== undefined && request !== undefined)
+      naming.answered(thread, request, text);
+    return result;
   }
 
   async function progress(
@@ -74,22 +89,21 @@ export function slackReplies(call: SlackCall) {
   ): Promise<void> {
     const thread = threadOf(target);
     if (thread === undefined) return;
-    const recipient = Recipient.check(target.replyContext)
-      ? target.replyContext
-      : undefined;
-    if (update.type === "working")
-      return status(thread, "processing", recipient?.user);
-    if (update.type === "text")
-      return streams.text(
-        target.idempotencyKey,
-        { ...thread, recipient },
-        update.text,
-      );
-    const end = update.reason === "failed" ? "suspended" : "active";
-    await streams
-      .stop(target.idempotencyKey, { status: end })
-      .catch(report("stream"));
-    await status(thread, end);
+    const requester = requesterOf(target.replyContext);
+    if (update.type === "working") {
+      const title = naming.initial(requester?.request);
+      return status(thread, "processing", {
+        ...(requester === undefined ? {} : { initiator: requester.user }),
+        ...(title === undefined ? {} : { title }),
+      });
+    }
+    if (update.type === "step")
+      return plans.step(target.idempotencyKey, thread, update.step);
+    const failed = update.reason === "failed";
+    await plans
+      .finish(target.idempotencyKey, failed ? "failed" : "stopped")
+      .catch(report("plan"));
+    await status(thread, failed ? "suspended" : "active");
   }
 
   return { send, progress };

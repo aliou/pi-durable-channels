@@ -1,8 +1,15 @@
 import type { AdapterStart, ChannelAdapter } from "@aliou/pi-durable-channels";
 import { compile, obj, str } from "@earendil-works/pi-schema";
 import { slackApi } from "./api";
-import { inboundOf, stoppedAddressOf } from "./events";
+import {
+  describeEvent,
+  inboundOf,
+  renamedThreadOf,
+  stoppedAddressOf,
+  type ThreadMessages,
+} from "./events";
 import { fetchSlackFile } from "./files";
+import { createNaming, type NameThread } from "./naming";
 import { slackReplies } from "./reply";
 import {
   listenSocket,
@@ -14,6 +21,8 @@ import {
 export type SlackOptions = {
   botToken: string;
   transport: SlackTransport;
+  threadMessages?: ThreadMessages;
+  nameThread?: NameThread;
   maxFileBytes?: number;
   debug?: boolean;
   apiUrl?: string;
@@ -36,7 +45,10 @@ export function slackChannel(options: SlackOptions): SlackChannel {
   const apiUrl = options.apiUrl ?? SLACK_API;
   const call = slackApi(options.botToken, apiUrl);
   const { transport } = options;
-  const replies = slackReplies(call);
+  const naming = createNaming(call, options.nameThread, (error) =>
+    console.error("slack naming", error),
+  );
+  const replies = slackReplies(call, naming);
   const files = {
     botToken: options.botToken,
     origin: options.filesUrl ?? SLACK_FILES,
@@ -45,15 +57,21 @@ export function slackChannel(options: SlackOptions): SlackChannel {
   let onHttpEvent: OnEvent | undefined;
 
   function receiver(ctx: AdapterStart, botUserId: string): OnEvent {
-    return async (event, team) => {
+    return async (event) => {
       const stopped = stoppedAddressOf(event);
       if (stopped !== undefined) return ctx.cancel(stopped);
-      const inbound = inboundOf(event, botUserId, team);
+      const renamed = renamedThreadOf(event);
+      if (renamed !== undefined) return naming.renamedByUser(renamed);
+      const inbound = inboundOf(event, {
+        botUserId,
+        threadMessages: options.threadMessages,
+      });
       if (inbound !== undefined) {
-        await ctx.deliver(inbound.message, { run: inbound.run });
+        await ctx.deliver(inbound.message, inbound.options);
         return;
       }
-      if (options.debug === true) console.error("slack skipped", event);
+      if (options.debug === true)
+        console.error("slack skipped", describeEvent(event));
     };
   }
 

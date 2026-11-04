@@ -4,10 +4,12 @@ import { join } from "node:path";
 import { createChannels } from "@aliou/pi-durable-channels";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
+  type AssistantMessage,
   createModels,
   type FauxResponseFactory,
   fauxAssistantMessage,
   fauxProvider,
+  fauxText,
   fauxToolCall,
   type Message,
 } from "@earendil-works/pi-ai";
@@ -21,8 +23,10 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import { obj } from "@earendil-works/pi-schema";
+import { obj, str } from "@earendil-works/pi-schema";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ThreadMessages } from "../events";
+import type { NameThread } from "../naming";
 import { slackChannel } from "../slack";
 import { httpEvents } from "../transport";
 import { type Call, fakeSlack, message, SECRET, signed } from "./fake-slack";
@@ -58,6 +62,18 @@ const holdTool = defineExtension({
   ],
 });
 
+const lookTool = defineExtension({
+  name: "test-look",
+  tools: [
+    defineTool({
+      name: "look",
+      description: "Look at a file",
+      parameters: obj({ file: str() }),
+      execute: async () => ({ output: [{ type: "text", text: "seen" }] }),
+    }),
+  ],
+});
+
 async function until(check: () => boolean): Promise<void> {
   const start = Date.now();
   while (!check()) {
@@ -86,10 +102,14 @@ function record(seen: Seen, messages: readonly Message[]): string | undefined {
 }
 
 type OpenOptions = {
-  respond?: FauxResponseFactory;
+  respond?: (
+    ...args: Parameters<FauxResponseFactory>
+  ) => AssistantMessage | undefined;
   faux?: Parameters<typeof fauxProvider>[0];
   env?: HarnessOptions["env"];
   extensions?: Extension[];
+  threadMessages?: ThreadMessages;
+  nameThread?: NameThread;
 };
 
 async function open(options: OpenOptions = {}) {
@@ -99,6 +119,8 @@ async function open(options: OpenOptions = {}) {
     transport: httpEvents(SECRET),
     apiUrl: slackApi.apiUrl,
     filesUrl: slackApi.origin,
+    threadMessages: options.threadMessages,
+    nameThread: options.nameThread,
   });
   const channels = createChannels({
     channels: {
@@ -124,6 +146,7 @@ async function open(options: OpenOptions = {}) {
   models.setProvider(faux.provider);
   const registry = createRegistry();
   registry.install(channels.extension);
+  registry.install(channels.tools);
   for (const extension of options.extensions ?? []) registry.install(extension);
   const harness = await Harness.open(
     new MemoryStorage(),
@@ -232,15 +255,25 @@ describe("slack channel end to end", () => {
     await harness.close(context);
   });
 
-  it("answers a direct message with files, streaming the reply into its session", async () => {
+  it("answers a direct message with files, showing its tool calls as steps before the answer", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "slack-env-"));
     directories.push(cwd);
     const env = new NodeExecutionEnv({ cwd });
     const reply = "Here is what I see in the picture and the report.";
     const { hub, harness, calls, seen, event, origin } = await open({
       env: () => env,
-      faux: { tokensPerSecond: 300, tokenSize: { min: 1, max: 1 } },
-      respond: () => fauxAssistantMessage(reply),
+      faux: { tokensPerSecond: 200, tokenSize: { min: 1, max: 1 } },
+      extensions: [lookTool],
+      respond: (transcript) =>
+        transcript.messages.at(-1)?.role === "user"
+          ? fauxAssistantMessage(
+              [
+                fauxText("Let me look."),
+                fauxToolCall("look", { file: "report.pdf" }),
+              ],
+              { stopReason: "toolUse" },
+            )
+          : fauxAssistantMessage(reply),
     });
     await hub.start();
     const file = (name: string, mimetype: string) => ({
@@ -275,14 +308,16 @@ describe("slack channel end to end", () => {
     );
     expect(seen.images).toContain("image/png");
 
-    expect(
-      methods(calls).filter((method) => !method.startsWith("GET")),
-    ).toEqual([
+    const used = methods(calls).filter((method) => !method.startsWith("GET"));
+    expect(used.slice(0, 3)).toEqual([
       "auth.test",
       "agents.sessions.setStatus",
-      "chat.startStream",
-      "chat.appendStream",
-      "chat.stopStream",
+      "chat.postMessage",
+    ]);
+    expect(used.slice(-3)).toEqual([
+      "chat.update",
+      "chat.postMessage",
+      "agents.sessions.setStatus",
     ]);
     const body = (method: string) =>
       calls.find((call) => call.method === method)?.body;
@@ -291,17 +326,148 @@ describe("slack channel end to end", () => {
       thread_ts: "200.000100",
       status: "processing",
       initiator_user_id: "U1",
+      title: "what is this?",
     });
-    expect(body("chat.startStream")).toMatchObject({
+    const [plan, answer] = posts(calls);
+    expect(plan).toMatchObject({
       channel: "D1",
       thread_ts: "200.000100",
+      text: "Working…",
+      blocks: [
+        {
+          type: "plan",
+          tasks: [
+            {
+              title: "look report.pdf",
+              details: {
+                type: "rich_text",
+                elements: [
+                  {
+                    type: "rich_text_section",
+                    elements: [{ type: "text", text: "Let me look." }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
     });
-    expect(body("chat.stopStream")).toMatchObject({ session_status: "active" });
-    const streamed = calls
-      .filter(({ method }) => /^chat\.\w+Stream$/.test(method))
-      .map(({ body }) => String(body.markdown_text ?? ""))
-      .join("");
-    expect(streamed).toBe(reply);
+    const updates = calls.filter(({ method }) => method === "chat.update");
+    expect(updates.at(-1)?.body).toMatchObject({
+      text: "Done: 1 step",
+      blocks: [{ title: "Done: 1 step", tasks: [{ status: "complete" }] }],
+    });
+    expect(answer).toEqual({
+      channel: "D1",
+      markdown_text: reply,
+      thread_ts: "200.000100",
+    });
+    await harness.close(context);
+  });
+
+  it("names a session from the request, renames it once from the answer, and leaves a person's title alone", async () => {
+    const asked: { request: string; answer: string }[] = [];
+    const { hub, harness, calls, event } = await open({
+      nameThread: async (input) => {
+        asked.push(input);
+        return "Picture: triage `cat.png`\n";
+      },
+    });
+    await hub.start();
+    const ask = (ts: string, text: string) =>
+      event(
+        message({
+          channel: "D1",
+          channel_type: "im",
+          ts,
+          text,
+          thread_ts: "200.000100",
+        }),
+      );
+    await event(
+      message({
+        channel: "D1",
+        channel_type: "im",
+        text: "<@UBOT>   what is   this?",
+      }),
+    );
+    await harness.waitForIdle(context);
+    await until(() =>
+      calls.some(({ method }) => method === "agents.sessions.rename"),
+    );
+    await ask("300.1", "and that?");
+    await harness.waitForIdle(context);
+    await event({
+      type: "agent_session_title_changed",
+      channel: "D1",
+      thread_ts: "200.000100",
+      title: "Mine",
+    });
+    await ask("300.2", "one more");
+    await harness.waitForIdle(context);
+
+    const body = (method: string) =>
+      calls.find((call) => call.method === method)?.body;
+    expect(body("agents.sessions.setStatus")).toMatchObject({
+      title: "what is this?",
+    });
+    expect(asked).toEqual([
+      {
+        request: "<@UBOT>   what is   this?",
+        answer: "re: <@UBOT>   what is   this?",
+      },
+    ]);
+    expect(
+      calls
+        .filter(({ method }) => method === "agents.sessions.rename")
+        .map(({ body }) => body),
+    ).toEqual([
+      {
+        channel_id: "D1",
+        thread_ts: "200.000100",
+        title: "Picture triage cat.png",
+      },
+    ]);
+    await harness.close(context);
+  });
+
+  it("runs every message of a thread it belongs to, and stays quiet when the agent declines", async () => {
+    const { hub, harness, calls, event } = await open({
+      threadMessages: "run",
+      respond: (transcript) => {
+        const last = transcript.messages.at(-1);
+        const quiet =
+          last?.role === "user" &&
+          JSON.stringify(last.content).includes("lunch");
+        return quiet
+          ? fauxAssistantMessage(fauxToolCall("no_reply", {}), {
+              stopReason: "toolUse",
+            })
+          : undefined;
+      },
+    });
+    await hub.start();
+    await event(message({ text: "<@UBOT> what broke?" }));
+    await harness.waitForIdle(context);
+    await event(
+      message({ thread_ts: "200.000100", ts: "300.1", text: "and the api?" }),
+    );
+    await harness.waitForIdle(context);
+    await event(
+      message({ thread_ts: "200.000100", ts: "300.2", text: "lunch anyone?" }),
+    );
+    await event(message({ thread_ts: "999.1", ts: "300.3", text: "hi" }));
+    await harness.waitForIdle(context);
+
+    expect(posts(calls).map((post) => post.markdown_text)).toEqual([
+      "re: <@UBOT> what broke?",
+      "re: and the api?",
+    ]);
+    const statuses = calls
+      .filter(({ method }) => method === "agents.sessions.setStatus")
+      .map(({ body }) => body.status);
+    expect(statuses.slice(-2)).toEqual(["processing", "active"]);
     await harness.close(context);
   });
 
@@ -333,7 +499,12 @@ describe("slack channel end to end", () => {
         .map(({ body }) => body.status);
     await until(() => statuses().length === 2);
     expect(statuses()).toEqual(["processing", "active"]);
-    expect(posts(calls)).toEqual([]);
+    expect(posts(calls).map(({ markdown_text }) => markdown_text)).toEqual([
+      undefined,
+    ]);
+    await until(() => calls.some(({ method }) => method === "chat.update"));
+    const update = calls.find(({ method }) => method === "chat.update");
+    expect(update?.body).toMatchObject({ text: "Stopped after 1 step" });
     await harness.close(context);
   });
 });

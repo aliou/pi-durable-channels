@@ -1,44 +1,70 @@
 import { describe, expect, it } from "vitest";
-import { inboundOf, stoppedAddressOf } from "../events";
+import {
+  describeEvent,
+  inboundOf,
+  renamedThreadOf,
+  stoppedAddressOf,
+} from "../events";
 import { slackTarget } from "../target";
 import { verifySlackSignature } from "../verify";
 import { message, SECRET, signed } from "./fake-slack";
 
+const bot = { botUserId: "UBOT" };
+
 describe("slack events", () => {
   it("runs on a mention, stores other thread messages, and skips the rest", () => {
     expect(
-      inboundOf(message({ thread_ts: "100.000100", text: "fyi" }), "UBOT"),
+      inboundOf(message({ thread_ts: "100.000100", text: "fyi" }), bot),
     ).toEqual({
       message: {
         address: "C1:100.000100",
         text: "fyi",
         requestId: "slack:C1:200.000100",
         author: "U1",
-        replyContext: { user: "U1" },
+        replyContext: { user: "U1", request: "fyi" },
         files: [],
       },
-      run: false,
+      options: { run: false },
     });
-    expect(
-      inboundOf(message({ text: "<@UBOT> help" }), "UBOT", "T1"),
-    ).toMatchObject({
+    expect(inboundOf(message({ text: "<@UBOT> help" }), bot)).toMatchObject({
       message: {
         address: "C1:200.000100",
-        replyContext: { user: "U1", team: "T1" },
+        replyContext: { user: "U1", request: "<@UBOT> help" },
       },
-      run: true,
+      options: {},
     });
-    expect(inboundOf(message({}), "UBOT")).toBeUndefined();
+    expect(inboundOf(message({}), bot)).toBeUndefined();
     expect(
-      inboundOf(message({ thread_ts: "1.1", bot_id: "B1" }), "UBOT"),
+      inboundOf(message({ thread_ts: "1.1", bot_id: "B1" }), bot),
     ).toBeUndefined();
     expect(
-      inboundOf(
-        message({ thread_ts: "1.1", subtype: "message_changed" }),
-        "UBOT",
-      ),
+      inboundOf(message({ thread_ts: "1.1", subtype: "message_changed" }), bot),
     ).toBeUndefined();
-    expect(inboundOf({ type: "reaction_added" }, "UBOT")).toBeUndefined();
+    expect(inboundOf({ type: "reaction_added" }, bot)).toBeUndefined();
+  });
+
+  it("runs thread messages without a mention when asked, only in threads that have a conversation", () => {
+    const reply = message({ thread_ts: "100.000100", text: "and also" });
+    expect(
+      inboundOf(reply, { ...bot, threadMessages: "run" })?.options,
+    ).toEqual({ run: true, create: false });
+    expect(
+      inboundOf(message({ text: "top level" }), {
+        ...bot,
+        threadMessages: "run",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("decodes Slack's escapes, leaving mentions alone", () => {
+    const escaped = message({
+      channel: "D1",
+      channel_type: "im",
+      text: "<@UBOT> run `a &amp;&amp; b 2&gt;&amp;1 &lt;in`",
+    });
+    expect(inboundOf(escaped, bot)?.message.text).toBe(
+      "<@UBOT> run `a && b 2>&1 <in`",
+    );
   });
 
   it("runs every direct message and passes its files on", () => {
@@ -56,7 +82,7 @@ describe("slack events", () => {
         { id: "F2", name: "gdrive link" },
       ],
     });
-    expect(inboundOf(shared, "UBOT")).toMatchObject({
+    expect(inboundOf(shared, bot)).toMatchObject({
       message: {
         address: "D1:200.000100",
         files: [
@@ -67,8 +93,24 @@ describe("slack events", () => {
           },
         ],
       },
-      run: true,
+      options: {},
     });
+  });
+
+  it("notices a person renaming a session, and describes skipped events in one line", () => {
+    expect(
+      renamedThreadOf({
+        type: "agent_session_title_changed",
+        channel: "C1",
+        thread_ts: "200.000100",
+        title: "Mine",
+        user: "U1",
+      }),
+    ).toEqual({ channel: "C1", threadTs: "200.000100" });
+    expect(renamedThreadOf(message({}))).toBeUndefined();
+    expect(
+      describeEvent(message({ bot_id: "B1", subtype: "bot_message" })),
+    ).toBe("message/bot_message C1 200.000100 from a bot");
   });
 
   it("maps the stop button to the session thread", () => {
