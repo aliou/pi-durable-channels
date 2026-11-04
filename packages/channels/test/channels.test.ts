@@ -720,6 +720,30 @@ describe("binding", () => {
     ]);
     await harness.close(context);
   });
+
+  it("reads the addresses of a conversation, aliases included, and the conversation of an address", async () => {
+    const test = setup();
+    test.adapter.result = () => ({ alias: "t9" });
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(inbound("one", "evt-1", { address: "case:1" }));
+    await harness.waitForIdle(context);
+    await expect(hub.addresses(first.conversationId)).resolves.toEqual([
+      { channel: "web", address: "case:1" },
+      { channel: "web", address: "t9" },
+    ]);
+    await expect(
+      hub.conversationOf({ channel: "web", address: "t9" }),
+    ).resolves.toBe(first.conversationId);
+    await expect(
+      hub.conversationOf({ channel: "web", address: "nobody" }),
+    ).resolves.toBeUndefined();
+    await hub.end({ channel: "web", address: "case:1" });
+    await expect(hub.addresses(first.conversationId)).resolves.toEqual([]);
+    await expect(
+      hub.conversationOf({ channel: "web", address: "t9" }),
+    ).resolves.toBeUndefined();
+    await harness.close(context);
+  });
 });
 
 describe("adapters", () => {

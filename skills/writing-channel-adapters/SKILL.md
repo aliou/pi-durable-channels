@@ -49,7 +49,7 @@ await hub.start(signal);
 await api.commit((tx) => channels.bind(tx, { channel: "github", address: "acme/app#42" }, api.conversationId), context);
 ```
 
-Host code uses `hub.bind(target, conversationId)`. An address belongs to one conversation; binding it to another throws.
+Host code uses `hub.bind(target, conversationId)`, and reads bindings with `hub.addresses(conversationId)` and `hub.conversationOf(key)`. An address belongs to one conversation; binding it to another throws.
 
 ## Messages
 

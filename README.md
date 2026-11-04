@@ -95,6 +95,8 @@ testing.
 | `start(signal?)` | Start every adapter with a `deliver` and `cancel` bound to its channel, and watch runs for `progress` |
 | `deliver(channel, message, options?)` | Admit a message; resolves once it is stored |
 | `bind(target, conversationId)` | Attach an address to a conversation |
+| `addresses(conversationId)` | Every address bound to the conversation, aliases included |
+| `conversationOf(key)` | The conversation bound to an address, or `undefined` |
 | `status(submissionId)` | `queued`, `running`, `sending`, `done`, `aborted`, `failed`, or `blocked` |
 | `cancel(key)` | Stop the run, its sends, and notifications; withdraw queued messages |
 | `clear(key)` | Cancel, then start a fresh context in the same conversation |

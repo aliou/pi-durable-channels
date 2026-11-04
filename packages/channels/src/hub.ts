@@ -11,6 +11,7 @@ import { type EnvBuilder, messageContent } from "./attachments";
 import { type BindTarget, bindAddress } from "./bind";
 import {
   ChannelsDoc,
+  conversationAddresses,
   deleteConversation,
   findBinding,
   setBinding,
@@ -39,6 +40,8 @@ export type ChannelsHub = {
     options?: DeliverOptions,
   ): Promise<DeliveryReceipt | undefined>;
   bind(target: BindTarget, conversationId: ConversationId): Promise<void>;
+  addresses(conversationId: ConversationId): Promise<AddressKey[]>;
+  conversationOf(key: AddressKey): Promise<ConversationId | undefined>;
   status(deliveryId: SubmissionId): Promise<DeliveryStatus | undefined>;
   cancel(key: AddressKey): Promise<void>;
   clear(key: AddressKey): Promise<void>;
@@ -189,10 +192,22 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
 
   const cancelAt = (key: AddressKey) => atAddress(key, cancel);
 
+  async function addresses(conversationId: ConversationId) {
+    const state = await harness.snapshot(ChannelsDoc, context);
+    return conversationAddresses(state, conversationId);
+  }
+
+  async function conversationOf(key: AddressKey) {
+    const state = await harness.snapshot(ChannelsDoc, context);
+    return findBinding(state, key)?.conversationId;
+  }
+
   return {
     start,
     deliver,
     bind,
+    addresses,
+    conversationOf,
     status: (deliveryId) => deliveryStatus(harness, deliveryId),
     cancel: cancelAt,
     clear: (key) =>
