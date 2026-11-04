@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./model": "./model.ts",
-    "./run": "./run.ts",
-    "./serve": "./serve.ts",
-    "./sink": "./sink.ts",
-    "./log": "./log.ts"
+    "./model": "./src/model.ts",
+    "./run": "./src/run.ts",
+    "./serve": "./src/serve.ts",
+    "./sink": "./src/sink.ts",
+    "./log": "./src/log.ts"
   },
   "scripts": {
     "check": "tsc -p tsconfig.json"

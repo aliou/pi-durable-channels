@@ -25,10 +25,6 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { obj, str } from "@earendil-works/pi-schema";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ThreadMessages } from "../events";
-import type { NameThread } from "../naming";
-import { slackChannel } from "../slack";
-import { httpEvents, type SlackTransport, socketMode } from "../transport";
 import {
   type Call,
   type FakeOptions,
@@ -38,7 +34,11 @@ import {
   served,
   signed,
   until,
-} from "./fake-slack";
+} from "../test/fake-slack";
+import type { ThreadMessages } from "./events";
+import type { NameThread } from "./naming";
+import { slackChannel } from "./slack";
+import { httpEvents, type SlackTransport, socketMode } from "./transport";
 
 const FILES = {
   "/files/cat.png": "png-bytes",

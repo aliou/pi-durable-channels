@@ -3,20 +3,20 @@ export {
   issueAddress,
   issuePath,
   parseIssueAddress,
-} from "./address";
+} from "./src/address";
 export {
   GITHUB_API,
   type GitHubCall,
   GitHubError,
   githubApi,
   type TokenSource,
-} from "./api";
+} from "./src/api";
 export {
   type AppOptions,
   appInstallation,
   type GitHubAuth,
   personalToken,
-} from "./auth";
-export { type GitHubEvent, type GitHubInbound, inboundOf } from "./events";
-export { type GitHubOptions, githubChannel } from "./github";
-export { verifyGitHubSignature } from "./verify";
+} from "./src/auth";
+export { type GitHubEvent, type GitHubInbound, inboundOf } from "./src/events";
+export { type GitHubOptions, githubChannel } from "./src/github";
+export { verifyGitHubSignature } from "./src/verify";

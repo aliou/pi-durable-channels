@@ -61,6 +61,6 @@ triage agent.
 
 ## Tests
 
-`test/factory.test.ts` runs the factory against a local bare repository and a fake GitHub API, with a recording Slack
+`src/factory.test.ts` runs the factory against a local bare repository and a fake GitHub API, with a recording Slack
 adapter and a scripted model: a Slack request that commits, pushes, opens a pull request, and gets a review comment on
 it, and the triage of a new issue. `nix develop -c pnpm --filter @examples/software-factory test`.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type SocketModeOptions, startSocketMode } from "../socket";
-import { type FakeOptions, fakeSlack, until } from "./fake-slack";
+import { type FakeOptions, fakeSlack, until } from "../test/fake-slack";
+import { type SocketModeOptions, startSocketMode } from "./socket";
 
 function gate() {
   let open: () => void = () => undefined;

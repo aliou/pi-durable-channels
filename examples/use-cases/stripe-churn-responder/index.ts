@@ -8,8 +8,8 @@ import { loadModel } from "@examples/shared/model";
 import { adapterRoute, type Route, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
 import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
-import { stripeEvents } from "./events";
-import { churnTools } from "./tools";
+import { stripeEvents } from "./src/events";
+import { churnTools } from "./src/tools";
 
 const env = process.env;
 const webhookSecret = env.STRIPE_WEBHOOK_SECRET;

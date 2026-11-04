@@ -33,8 +33,8 @@ import {
   webhook,
 } from "@examples/github-channel/test/fake-github";
 import { afterEach, describe, expect, it } from "vitest";
-import { softwareFactory } from "../factory";
-import { createWorkspace } from "../workspace";
+import { softwareFactory } from "./factory";
+import { createWorkspace } from "./workspace";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, ...args: string[]) => {

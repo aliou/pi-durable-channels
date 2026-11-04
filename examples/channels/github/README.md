@@ -88,8 +88,8 @@ send(reply)
 
 ## Tests
 
-`test/events.test.ts` covers event mapping, addresses, and signatures. `test/auth.test.ts` covers app JWTs, the
-installation lookup, and token reuse. `test/github.test.ts` runs a real harness against
+`src/events.test.ts` covers event mapping, addresses, and signatures. `src/auth.test.ts` covers app JWTs, the
+installation lookup, and token reuse. `src/github.test.ts` runs a real harness against
 a local fake GitHub API: triage of a new issue with a redelivery and an unbound pull request, a review run once
 with its line comments even when GitHub delivers the review first, skipped events reported, and the `eyes` reaction
 added when a run starts and removed when it ends. `nix develop -c pnpm --filter @examples/github-channel test`.

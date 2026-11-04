@@ -4,8 +4,8 @@ import { logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
-import { inboxChannel } from "./adapter";
-import { responderTools as createResponderTools } from "./tools";
+import { inboxChannel } from "./src/adapter";
+import { responderTools as createResponderTools } from "./src/tools";
 
 const instructions = await readFile(
   new URL("instructions.md", import.meta.url),

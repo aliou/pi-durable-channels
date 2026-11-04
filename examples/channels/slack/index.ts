@@ -6,9 +6,9 @@ export {
   type SlackInbound,
   stoppedAddressOf,
   type ThreadMessages,
-} from "./events";
-export type { NameThread } from "./naming";
-export { type SlackOptions, slackChannel } from "./slack";
-export { slackTarget } from "./target";
-export { httpEvents, type SlackTransport, socketMode } from "./transport";
-export { verifySlackSignature } from "./verify";
+} from "./src/events";
+export type { NameThread } from "./src/naming";
+export { type SlackOptions, slackChannel } from "./src/slack";
+export { slackTarget } from "./src/target";
+export { httpEvents, type SlackTransport, socketMode } from "./src/transport";
+export { verifySlackSignature } from "./src/verify";

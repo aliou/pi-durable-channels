@@ -32,7 +32,7 @@ function text(value: string, isError = false) {
 
 async function readRecords(name: string): Promise<Record<string, unknown>> {
   const raw = await readFile(
-    new URL(`data/${name}.json`, import.meta.url),
+    new URL(`../data/${name}.json`, import.meta.url),
     "utf8",
   );
   const records: unknown = JSON.parse(raw);

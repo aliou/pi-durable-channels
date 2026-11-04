@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { issueAddress, parseIssueAddress } from "../address";
-import { inboundOf } from "../events";
-import { verifyGitHubSignature } from "../verify";
-import { BOT, payloads, SECRET, webhook } from "./fake-github";
+import { BOT, payloads, SECRET, webhook } from "../test/fake-github";
+import { issueAddress, parseIssueAddress } from "./address";
+import { inboundOf } from "./events";
+import { verifyGitHubSignature } from "./verify";
 
 const event = (name: string, payload: unknown) =>
   inboundOf({ name, delivery: "d1", payload }, BOT);

@@ -12,8 +12,6 @@ import {
   MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { describe, expect, it } from "vitest";
-import { personalToken } from "../auth";
-import { githubChannel } from "../github";
 import {
   type Call,
   fakeGitHub,
@@ -21,7 +19,9 @@ import {
   type Route,
   served,
   webhook,
-} from "./fake-github";
+} from "../test/fake-github";
+import { personalToken } from "./auth";
+import { githubChannel } from "./github";
 
 const MODEL = { provider: "faux", modelId: "faux-1" };
 

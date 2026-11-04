@@ -1,8 +1,8 @@
 import { createVerify, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { githubApi } from "../api";
-import { appInstallation, personalToken } from "../auth";
-import { BOT, fakeGitHub } from "./fake-github";
+import { BOT, fakeGitHub } from "../test/fake-github";
+import { githubApi } from "./api";
+import { appInstallation, personalToken } from "./auth";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,

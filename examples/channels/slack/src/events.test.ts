@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { message, SECRET, signed } from "../test/fake-slack";
 import {
   describeEvent,
   inboundOf,
   renamedThreadOf,
   stoppedAddressOf,
-} from "../events";
-import { slackTarget } from "../target";
-import { verifySlackSignature } from "../verify";
-import { message, SECRET, signed } from "./fake-slack";
+} from "./events";
+import { slackTarget } from "./target";
+import { verifySlackSignature } from "./verify";
 
 const bot = { botUserId: "UBOT" };
 

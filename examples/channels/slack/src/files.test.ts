@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fetchSlackFile } from "../files";
-import { fakeSlack } from "./fake-slack";
+import { fakeSlack } from "../test/fake-slack";
+import { fetchSlackFile } from "./files";
 
 describe("slack files", () => {
   it("downloads with the bot token from Slack's file host only", async () => {

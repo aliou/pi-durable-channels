@@ -123,7 +123,7 @@ send(reply, ctx) (reply.ts)
 
 ## Tests
 
-`test/` covers event mapping, signature checks, and address parsing (`events.test.ts`), file downloads
+`src/` holds the adapter with its tests colocated: event mapping, signature checks, and address parsing (`events.test.ts`), file downloads
 (`files.test.ts`), and through a real harness against a local fake Slack API (`slack.test.ts`): a case thread, a DM
 with an image and a PDF saved in the conversation's environment, its narration and tool calls as plan tasks, and the answer after them,
 session naming and a person's rename, a thread where the agent declines with `no_reply`, and the stop button.
