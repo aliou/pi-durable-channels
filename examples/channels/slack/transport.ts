@@ -1,7 +1,7 @@
 import { compile, lit, obj, str, unknown } from "@earendil-works/pi-schema";
 import { slackApi } from "./api";
 import { parseJson, readBody } from "./body";
-import { runSocketMode } from "./socket";
+import { type SocketMode, startSocketMode } from "./socket";
 import { verifySlackSignature } from "./verify";
 
 export type SlackTransport =
@@ -50,9 +50,9 @@ export function listenSocket(socket: {
   onEvent: OnEvent;
   onError(error: unknown): void;
   signal: AbortSignal;
-}): void {
+}): Promise<SocketMode> {
   const open = slackApi(socket.appToken, socket.apiUrl);
-  void runSocketMode({
+  return startSocketMode({
     open: async () => {
       const opened = await open("apps.connections.open", {}, socket.signal);
       if (!Connection.check(opened))

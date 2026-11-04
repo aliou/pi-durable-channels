@@ -48,10 +48,18 @@ the session (`agent_session_title_changed`) stops that for the thread.
 ## How it works
 
 ```text
-hub.start → slack.start({ deliver, cancel, signal })
-  auth.test → the bot's user ID
-  socketMode: apps.connections.open → WebSocket; reconnects until the signal aborts      (transport.ts, socket.ts)
+hub.start → slack.start({ deliver, cancel, report, signal })
+  auth.test → the bot's user ID; failure rejects start
+  socketMode: apps.connections.open → WebSocket → resolve on hello                       (transport.ts, socket.ts)
+    refused, closed, or no hello within 10 s → reject start
+    disconnect frame: stop taking events, close once the events being handled are acked, reconnect
+    later drops: reconnect after 1 s in the background, failures reported as adapter_error
   httpEvents: slack.fetch accepts requests (503 before start)
+
+hub.stop → signal aborts → each socket closes once the events it is handling are acked
+  events arriving after that are not acked; Slack resends them
+  failures after the abort are not reported
+  slack.stop resolves when the reconnect loop has exited
 
 inbound event
   httpEvents: body over 1 MiB → 413; bad signature or timestamp older than 5 min → 401  (verify.ts)
@@ -118,4 +126,9 @@ send(reply, ctx) (reply.ts)
 (`files.test.ts`), and through a real harness against a local fake Slack API (`slack.test.ts`): a case thread, a DM
 with an image and a PDF saved in the conversation's environment, its tool call as a plan step, and the answer after it,
 session naming and a person's rename, a thread where the agent declines with `no_reply`, and the stop button.
-`nix develop -c pnpm --filter @examples/slack-channel test`. Socket Mode has no automated test.
+Socket Mode runs against a local WebSocket server: `start` waits for `hello`, a bad bot token or a refused
+`apps.connections.open` rejects it, and an event in flight at stop is acked before the socket closes.
+`socket.test.ts` drives the connection on its own: a socket that closes before `hello` or sends none in time rejects
+`start`, events being handled are acked before the socket closes at stop or on `disconnect`, and nothing is reported
+once stopped.
+`nix develop -c pnpm --filter @examples/slack-channel test`.

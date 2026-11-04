@@ -30,11 +30,11 @@ export type RunOptions = {
   models: Models;
   extensions: readonly Extension[];
   env?: HarnessOptions["env"];
-  routes?: Record<string, Route>;
+  routes: Record<string, Route>;
 };
 
-function serveRoutes(routes: Record<string, Route>, hub: ChannelsHub): void {
-  serve(Number(process.env.PORT ?? 8787), async (request) => {
+function serveRoutes(routes: Record<string, Route>, hub: ChannelsHub) {
+  return serve(Number(process.env.PORT ?? 8787), async (request) => {
     const route = routes[`${request.method} ${new URL(request.url).pathname}`];
     return route === undefined
       ? new Response("Not Found", { status: 404 })
@@ -65,8 +65,9 @@ export async function run(options: RunOptions): Promise<void> {
   harness.resume();
   const hub = options.channels.hub(harness, { env: options.env });
   await hub.start();
-  if (options.routes !== undefined) serveRoutes(options.routes, hub);
+  const server = serveRoutes(options.routes, hub);
   process.once("SIGINT", async () => {
+    await new Promise((resolve) => server.close(resolve));
     await hub.stop();
     await harness.close(BACKGROUND_CONTEXT);
     process.exit(0);

@@ -1,6 +1,7 @@
 import {
   createServer,
   type IncomingMessage,
+  type Server,
   type ServerResponse,
 } from "node:http";
 
@@ -60,8 +61,8 @@ async function writeResponse(
 export function serve(
   port: number,
   handle: (request: Request) => Promise<Response>,
-): void {
-  createServer(async (incoming, outgoing) => {
+): Server {
+  return createServer(async (incoming, outgoing) => {
     const response = await respond(incoming, handle);
     await writeResponse(response, outgoing);
   }).listen(port, "127.0.0.1", () =>

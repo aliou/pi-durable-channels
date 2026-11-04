@@ -11,6 +11,7 @@ import {
 import { fetchSlackFile } from "./files";
 import { createNaming, type NameThread } from "./naming";
 import { slackReplies } from "./reply";
+import type { SocketMode } from "./socket";
 import type { Thread } from "./target";
 import {
   listenSocket,
@@ -58,6 +59,7 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
     maxBytes: options.maxFileBytes ?? MAX_FILE_BYTES,
   };
   let onHttpEvent: OnEvent | undefined;
+  let socket: SocketMode | undefined;
 
   const receive = async (request: Request) =>
     transport.kind === "http" && onHttpEvent !== undefined
@@ -95,7 +97,7 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
       const onEvent = receiver(ctx, auth.user_id);
       if (transport.kind === "http") onHttpEvent = onEvent;
       else
-        listenSocket({
+        socket = await listenSocket({
           apiUrl,
           appToken: transport.appToken,
           onEvent,
@@ -103,7 +105,13 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
           signal: ctx.signal,
         });
     },
-    ...(transport.kind === "http" ? { fetch: receive } : {}),
+    ...(transport.kind === "http"
+      ? { fetch: receive }
+      : {
+          stop: async () => {
+            await socket?.done;
+          },
+        }),
     send: replies.send,
     events: replies.events,
     fetchFile: (url) => fetchSlackFile(url, files),

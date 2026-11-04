@@ -28,14 +28,16 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessages } from "../events";
 import type { NameThread } from "../naming";
 import { slackChannel } from "../slack";
-import { httpEvents, socketMode } from "../transport";
+import { httpEvents, type SlackTransport, socketMode } from "../transport";
 import {
   type Call,
+  type FakeOptions,
   fakeSlack,
   message,
   SECRET,
   served,
   signed,
+  until,
 } from "./fake-slack";
 
 const FILES = {
@@ -81,14 +83,6 @@ const lookTool = defineExtension({
   ],
 });
 
-async function until(check: () => boolean): Promise<void> {
-  const start = Date.now();
-  while (!check()) {
-    if (Date.now() - start > 5000) throw new Error("condition not met in time");
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
 type Seen = { texts: string[][]; images: string[] };
 
 function record(seen: Seen, messages: readonly Message[]): string | undefined {
@@ -117,13 +111,15 @@ type OpenOptions = {
   extensions?: Extension[];
   threadMessages?: ThreadMessages;
   nameThread?: NameThread;
+  transport?: SlackTransport;
+  fake?: FakeOptions;
 };
 
 async function open(options: OpenOptions = {}) {
-  const slackApi = await fakeSlack(FILES);
+  const slackApi = await fakeSlack(FILES, options.fake);
   const slack = slackChannel({
     botToken: "xoxb-test",
-    transport: httpEvents(SECRET),
+    transport: options.transport ?? httpEvents(SECRET),
     apiUrl: slackApi.apiUrl,
     filesUrl: slackApi.origin,
     threadMessages: options.threadMessages,
@@ -170,7 +166,7 @@ async function open(options: OpenOptions = {}) {
     context,
   );
   const hub = channels.hub(harness, { env: options.env });
-  const post = served(slack);
+  const post = (request: Request) => served(slack)(request);
   const event = (body: Record<string, unknown>) =>
     post(signed({ type: "event_callback", team_id: "T1", event: body }));
   return { post, hub, harness, seen, event, reports, ...slackApi };
@@ -541,6 +537,101 @@ describe("slack channel end to end", () => {
     await until(() => calls.some(({ method }) => method === "chat.update"));
     const update = calls.find(({ method }) => method === "chat.update");
     expect(update?.body).toMatchObject({ text: "Stopped after 1 step" });
+    await harness.close(context);
+  });
+});
+
+describe("slack socket mode", () => {
+  const socket = (fake: FakeOptions = {}) =>
+    open({ transport: socketMode("xapp-test"), fake });
+
+  it("is ready once Slack says hello, and stop closes the socket", async () => {
+    const {
+      hub,
+      harness,
+      calls,
+      socket: server,
+    } = await socket({
+      hello: false,
+    });
+    let ready = false;
+    const starting = hub.start().then(() => {
+      ready = true;
+    });
+    await until(() => server.log.includes("connected"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ready).toBe(false);
+    server.send({ type: "hello" });
+    await starting;
+    expect(calls.map(({ method, token }) => [method, token])).toEqual([
+      ["auth.test", "Bearer xoxb-test"],
+      ["apps.connections.open", "Bearer xapp-test"],
+    ]);
+    await hub.stop();
+    await until(() => server.log.includes("closed"));
+    expect(server.log).toEqual(["connected", "closed"]);
+    await harness.close(context);
+  });
+
+  it("fails to start on a bad bot token or a refused connection", async () => {
+    for (const method of ["auth.test", "apps.connections.open"]) {
+      const { hub, harness } = await socket({ refuse: [method] });
+      await expect(hub.start()).rejects.toThrow(
+        `Slack ${method} failed: invalid_auth`,
+      );
+      await hub.stop();
+      await harness.close(context);
+    }
+  });
+
+  it("acks a delivery in flight at stop before it closes the socket", async () => {
+    let release: () => void = () => undefined;
+    const holdFiles = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const {
+      hub,
+      harness,
+      calls,
+      origin,
+      socket: server,
+    } = await socket({
+      holdFiles,
+    });
+    await hub.start();
+    server.send({
+      type: "events_api",
+      envelope_id: "E1",
+      payload: {
+        type: "event_callback",
+        event: message({
+          channel: "D1",
+          channel_type: "im",
+          subtype: "file_share",
+          text: "see attached",
+          files: [
+            {
+              id: "F1",
+              name: "report.pdf",
+              mimetype: "application/pdf",
+              url_private: `${origin}/files/report.pdf`,
+            },
+          ],
+        }),
+      },
+    });
+    await until(() =>
+      calls.some(({ method }) => method === "GET /files/report.pdf"),
+    );
+    const stopping = hub.stop();
+    release();
+    await stopping;
+    await until(() => server.log.includes("closed"));
+    expect(server.log).toEqual(["connected", "ack E1", "closed"]);
+    await expect(
+      hub.conversationOf({ channel: "slack", address: "D1:200.000100" }),
+    ).resolves.toBeDefined();
+    await harness.waitForIdle(context);
     await harness.close(context);
   });
 });

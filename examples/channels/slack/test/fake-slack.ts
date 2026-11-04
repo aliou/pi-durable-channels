@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { ChannelAdapter } from "@aliou/pi-durable-channels";
 import { afterEach } from "vitest";
+import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 
 export const SECRET = "slack-signing-secret";
 
@@ -12,7 +13,24 @@ export type Call = {
   body: Record<string, unknown>;
 };
 
-export type FakeSlack = { apiUrl: string; origin: string; calls: Call[] };
+export type FakeSocket = {
+  log: string[];
+  send(frame: unknown): void;
+  close(): void;
+};
+
+export type FakeSlack = {
+  apiUrl: string;
+  origin: string;
+  calls: Call[];
+  socket: FakeSocket;
+};
+
+export type FakeOptions = {
+  refuse?: string[];
+  hello?: boolean;
+  holdFiles?: Promise<void>;
+};
 
 const servers: (() => Promise<void>)[] = [];
 
@@ -20,13 +38,39 @@ afterEach(async () => {
   for (const close of servers.splice(0)) await close();
 });
 
-function reply(method: string, ts: () => string): Record<string, unknown> {
+function reply(
+  method: string,
+  host: string,
+  ts: () => string,
+): Record<string, unknown> {
   if (method === "auth.test") return { ok: true, user_id: "UBOT" };
+  if (method === "apps.connections.open")
+    return { ok: true, url: `ws://${host}/socket` };
   return { ok: true, ts: ts() };
+}
+
+function socketMode(sockets: WebSocketServer, hello: boolean): FakeSocket {
+  const log: string[] = [];
+  let client: WsSocket | undefined;
+  sockets.on("connection", (socket) => {
+    client = socket;
+    log.push("connected");
+    if (hello) socket.send(JSON.stringify({ type: "hello" }));
+    socket.on("message", (data) => {
+      log.push(`ack ${JSON.parse(String(data)).envelope_id}`);
+    });
+    socket.on("close", () => log.push("closed"));
+  });
+  return {
+    log,
+    send: (frame) => client?.send(JSON.stringify(frame)),
+    close: () => client?.close(),
+  };
 }
 
 export async function fakeSlack(
   files: Record<string, string> = {},
+  options: FakeOptions = {},
 ): Promise<FakeSlack> {
   const calls: Call[] = [];
   let next = 100;
@@ -40,22 +84,33 @@ export async function fakeSlack(
       const file = files[path];
       if (file !== undefined) {
         calls.push({ method: `GET ${path}`, token, body: {} });
-        response.writeHead(200);
-        response.end(file);
+        void (options.holdFiles ?? Promise.resolve()).then(() => {
+          response.writeHead(200);
+          response.end(file);
+        });
         return;
       }
       const method = path.replace(/^\/api\//, "");
       const body = JSON.parse(Buffer.concat(chunks).toString());
       calls.push({ method, token, body });
+      const answer = options.refuse?.includes(method)
+        ? { ok: false, error: "invalid_auth" }
+        : reply(method, request.headers.host ?? "", ts);
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(reply(method, ts)));
+      response.end(JSON.stringify(answer));
     });
   });
+  const sockets = new WebSocketServer({ server, path: "/socket" });
+  const socket = socketMode(sockets, options.hello ?? true);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  servers.push(() => new Promise((resolve) => server.close(() => resolve())));
+  servers.push(() => {
+    for (const client of sockets.clients) client.terminate();
+    sockets.close();
+    return new Promise((resolve) => server.close(() => resolve()));
+  });
   const { port } = server.address() as AddressInfo;
   const origin = `http://127.0.0.1:${port}`;
-  return { apiUrl: `${origin}/api`, origin, calls };
+  return { apiUrl: `${origin}/api`, origin, calls, socket };
 }
 
 export function signed(
@@ -91,4 +146,12 @@ export function served(
 ): (request: Request) => Promise<Response> {
   if (adapter.fetch === undefined) throw new Error("The adapter has no fetch");
   return adapter.fetch;
+}
+
+export async function until(check: () => boolean): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > 5000) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
