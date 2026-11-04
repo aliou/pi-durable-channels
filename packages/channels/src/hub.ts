@@ -16,7 +16,7 @@ import {
   findBinding,
   setBinding,
 } from "./doc";
-import { type ProgressWatch, watchProgress } from "./progress";
+import { type EventsWatch, watchEvents } from "./events";
 import type { Reporter } from "./report";
 import type { AdapterLookup } from "./send";
 import { deliveryStatus } from "./status";
@@ -71,7 +71,7 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     ({ adapter }) => adapter,
   );
   let starting: Promise<void> | undefined;
-  let watcher: ProgressWatch | undefined;
+  let watcher: EventsWatch | undefined;
   let stopping: Promise<void> | undefined;
 
   function serial<T>(key: AddressKey, run: () => Promise<T>): Promise<T> {
@@ -179,8 +179,8 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
 
   async function startAll(): Promise<void> {
     const channels = Object.entries(setup.options.channels);
-    if (adapters.some((adapter) => adapter.progress !== undefined))
-      watcher = await watchProgress(harness, setup.adapterFor, setup.report);
+    if (adapters.some((adapter) => adapter.events !== undefined))
+      watcher = await watchEvents(harness, setup.adapterFor, setup.report);
     const { signal } = controller;
     await Promise.all(
       channels.map(([channel, { adapter }]) =>

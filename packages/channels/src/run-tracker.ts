@@ -8,9 +8,9 @@ import type {
 import { ChannelMessage } from "./doc";
 import { replyKey, runEntries } from "./hook";
 import type { Reporter } from "./report";
+import { eventsOf } from "./run-events";
 import type { AdapterLookup } from "./send";
-import { stepsOf } from "./steps";
-import type { ChannelAdapter, ReplyProgress, ReplyTarget } from "./types";
+import type { ChannelAdapter, ChannelEvent, ReplyTarget } from "./types";
 
 const context = BACKGROUND_CONTEXT;
 
@@ -24,18 +24,17 @@ type Run = {
   first: EntryId;
   inputs: string;
   recipients: Recipient[];
-  titles: Map<string, string>;
   cursor?: EntryId;
 };
 
 async function notify(
   recipients: readonly Recipient[],
-  update: ReplyProgress,
+  event: ChannelEvent,
   report: Reporter,
 ): Promise<void> {
   for (const { channel, adapter, target } of recipients) {
     await Promise.resolve()
-      .then(() => adapter.progress?.(target, update))
+      .then(() => adapter.events?.(target, event))
       .catch((error: unknown) =>
         report({
           kind: "adapter_error",
@@ -47,11 +46,12 @@ async function notify(
   }
 }
 
-function stoppedOf(live: LiveState, run: Run): ReplyProgress | undefined {
+function outcomeOf(live: LiveState, run: Run): ChannelEvent {
   const failure = live.runFailure;
-  if (failure?.first !== run.first) return undefined;
+  if (failure?.first !== run.first)
+    return { type: "run_ended", outcome: "completed" };
   const aborted = failure.reason === "aborted" || failure.reason === "reset";
-  return { type: "stopped", reason: aborted ? "aborted" : "failed" };
+  return { type: "run_ended", outcome: aborted ? "aborted" : "failed" };
 }
 
 async function recipientsOf(
@@ -62,7 +62,7 @@ async function recipientsOf(
   const entries = await runEntries(conversation, { first }, context);
   return entries.filter(ChannelMessage.is).flatMap(({ id, data }) => {
     const adapter = adapterFor(data.channel);
-    if (adapter?.progress === undefined) return [];
+    if (adapter?.events === undefined) return [];
     const { channel, author: _author, ...target } = data;
     const idempotencyKey = replyKey(id);
     return [{ channel, adapter, target: { ...target, idempotencyKey } }];
@@ -91,7 +91,7 @@ export function runTracker(
     const added = current.recipients.filter(
       ({ target }) => !known.has(target.idempotencyKey),
     );
-    await notify(added, { type: "working" }, report);
+    await notify(added, { type: "run_started" }, report);
   }
 
   async function freshEntries(current: Run) {
@@ -103,33 +103,26 @@ export function runTracker(
     return entries.filter(({ id }) => id > previous);
   }
 
-  async function steps(current: Run): Promise<void> {
+  async function activity(current: Run): Promise<void> {
     const entries = await freshEntries(current);
-    for (const step of stepsOf(entries, current.titles))
-      await notify(current.recipients, { type: "step", step }, report);
+    for (const event of eventsOf(entries))
+      await notify(current.recipients, event, report);
   }
 
   async function end(live: LiveState): Promise<void> {
     if (run === undefined) return;
-    const stopped = stoppedOf(live, run);
     const ended = run;
     run = undefined;
-    await steps(ended);
-    const { recipients } = ended;
-    if (stopped !== undefined) await notify(recipients, stopped, report);
+    await activity(ended);
+    await notify(ended.recipients, outcomeOf(live, ended), report);
   }
 
   return async (live: LiveState): Promise<void> => {
     const first = live.run?.first;
     if (run !== undefined && run.first !== first) await end(live);
     if (live.run === undefined || first === undefined) return;
-    run ??= {
-      first,
-      inputs: "",
-      recipients: [],
-      titles: new Map(),
-    };
+    run ??= { first, inputs: "", recipients: [] };
     await admit(run, live.run);
-    await steps(run);
+    await activity(run);
   };
 }

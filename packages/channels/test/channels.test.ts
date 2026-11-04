@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
+  type AssistantMessage,
   createModels,
   fauxAssistantMessage,
   fauxText,
@@ -18,7 +19,7 @@ import {
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { obj } from "@earendil-works/pi-schema";
 import { describe, expect, it } from "vitest";
-import type { AdapterStart, ReplyProgress, ReplyTarget } from "../src";
+import type { AdapterStart, ChannelEvent, ReplyTarget } from "../src";
 import {
   accepted,
   context,
@@ -1153,8 +1154,8 @@ describe("stop", () => {
       await ready.promise;
       log.push(`started, open=${!ctx.signal.aborted}`);
     };
-    test.adapter.progress = (_target, update) => {
-      log.push(update.type);
+    test.adapter.events = (_target, event) => {
+      log.push(event.type);
     };
     const { harness, hub } = await test.open(new MemoryStorage());
     const starting = hub.start();
@@ -1183,12 +1184,12 @@ describe("stop", () => {
     await harness.close(context);
   });
 
-  it("stops adapters after the progress calls in flight finish", async () => {
+  it("stops adapters after the events calls in flight finish", async () => {
     const test = setup();
     const { log } = stoppable(test);
     const rendering = gate();
-    test.adapter.progress = async (_target, update) => {
-      if (update.type !== "working") return;
+    test.adapter.events = async (_target, event) => {
+      if (event.type !== "run_started") return;
       log.push("rendering");
       await rendering.promise;
       log.push("rendered");
@@ -1208,7 +1209,7 @@ describe("stop", () => {
   });
 });
 
-type Update = { target: ReplyTarget; update: ReplyProgress };
+type Seen = { target: ReplyTarget; event: ChannelEvent };
 
 describe("attachments", () => {
   const files = [
@@ -1324,66 +1325,147 @@ describe("attachments", () => {
   });
 });
 
-describe("progress", () => {
-  function withProgress(test: ReturnType<typeof setup>) {
-    const updates: Update[] = [];
+describe("events", () => {
+  function withEvents(test: ReturnType<typeof setup>) {
+    const seen: Seen[] = [];
     const started: Partial<AdapterStart> = {};
-    test.adapter.progress = (target, update) => {
-      updates.push({ target, update });
+    const sentAtEnd: number[] = [];
+    test.adapter.events = (target, event) => {
+      seen.push({ target, event });
+      if (event.type === "run_ended") sentAtEnd.push(test.adapter.sent.length);
     };
     test.adapter.start = (ctx) => {
       Object.assign(started, ctx);
     };
-    return { updates, started };
+    return { seen, started, sentAtEnd };
   }
 
-  const kinds = (updates: Update[]) =>
-    updates
-      .map(({ update }) => update.type)
-      .filter((type, index, all) => all[index - 1] !== type);
+  const eventsOf = (seen: Seen[]) => seen.map(({ event }) => event);
+  const ended = (seen: Seen[]) => () =>
+    seen.some(({ event }) => event.type === "run_ended");
 
-  it("reports each tool call as a step, with the text before it, and keys it like the reply", async () => {
-    const held = { gate: gate() };
+  const toolThenAnswer =
+    (first: AssistantMessage, answer = "done"): Responder =>
+    (_text, last) =>
+      last?.role === "user" ? first : fauxAssistantMessage(answer);
+
+  it("reports a run's narration and tool calls in order, without the answer, keyed like the reply", async () => {
     const test = setup({
-      extensions: [holdTool(held)],
-      settings: { progress: { partialIntervalMs: 0 } },
-      respond: (_text, last) =>
-        last?.role === "user"
-          ? fauxAssistantMessage(
-              [fauxText("Let me check."), fauxToolCall("work", {})],
-              { stopReason: "toolUse" },
-            )
-          : fauxAssistantMessage("done"),
+      extensions: [holdTool({})],
+      respond: toolThenAnswer(
+        fauxAssistantMessage(
+          [fauxText("Let me check."), fauxToolCall("work", {})],
+          { stopReason: "toolUse" },
+        ),
+      ),
     });
-    const { updates } = withProgress(test);
+    const { seen, sentAtEnd } = withEvents(test);
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
     await hub.start();
-    await deliver(inbound("hello", "evt-1", { replyContext: { ts: "1" } }));
-    await eventually(() =>
-      updates.some(({ update }) => update.type === "step"),
+    const receipt = await deliver(
+      inbound("hello", "evt-1", { replyContext: { ts: "1" } }),
     );
-    held.gate.open();
     await harness.waitForIdle(context);
-    expect(kinds(updates)).toEqual(["working", "step"]);
-    const steps = updates.flatMap(({ update }) =>
-      update.type === "step" ? [update.step] : [],
+    await eventually(ended(seen));
+    const conversation = await conversationOf(harness, receipt.conversationId);
+    const entries = await entriesOf(conversation);
+    const narrated = entries.find((entry) =>
+      entry.model?.some((message) => message.role === "assistant"),
     );
-    expect(steps.map(({ status }) => status)).toEqual([
-      "in_progress",
-      "complete",
+    const call = narrated?.model?.[0];
+    const callId =
+      call?.role === "assistant"
+        ? call.content.find((part) => part.type === "toolCall")?.id
+        : undefined;
+    expect(eventsOf(seen)).toEqual([
+      { type: "run_started" },
+      { type: "text", id: String(narrated?.id), text: "Let me check." },
+      { type: "tool_started", id: callId, name: "work", args: {} },
+      {
+        type: "tool_finished",
+        id: callId,
+        name: "work",
+        isError: false,
+        output: "worked",
+      },
+      { type: "run_ended", outcome: "completed" },
     ]);
-    expect(steps[0]).toMatchObject({ title: "work", details: "Let me check." });
+    expect(sentAtEnd).toEqual([1]);
     const [sent] = test.adapter.sent;
     expect(sent?.message.parts).toEqual([{ type: "text", text: "done" }]);
-    expect(updates[0]?.target).toEqual({
-      address: "thread-1",
-      replyContext: { ts: "1" },
-      idempotencyKey: sent?.ctx.idempotencyKey,
-    });
+    expect(new Set(seen.map(({ target }) => JSON.stringify(target)))).toEqual(
+      new Set([
+        JSON.stringify({
+          address: "thread-1",
+          replyContext: { ts: "1" },
+          idempotencyKey: sent?.ctx.idempotencyKey,
+        }),
+      ]),
+    );
     await harness.close(context);
   });
 
-  it("reports a run the adapter cancels as stopped", async () => {
+  it("hides no_reply and the text next to it", async () => {
+    const test = setup({
+      respond: toolThenAnswer(
+        fauxAssistantMessage(
+          [fauxText("Not for me."), fauxToolCall("no_reply", {})],
+          { stopReason: "toolUse" },
+        ),
+      ),
+    });
+    const { seen } = withEvents(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    await eventually(ended(seen));
+    expect(eventsOf(seen)).toEqual([
+      { type: "run_started" },
+      { type: "run_ended", outcome: "completed" },
+    ]);
+    await harness.close(context);
+  });
+
+  it("joins the text parts of a tool result and skips its images", async () => {
+    const picture = defineExtension({
+      name: "test-picture",
+      tools: [
+        defineTool({
+          name: "picture",
+          description: "Take a picture",
+          parameters: obj({}),
+          execute: async () => ({
+            output: [
+              { type: "text", text: "before " },
+              { type: "image", data: "aGk=", mimeType: "image/png" },
+              { type: "text", text: "after" },
+            ],
+          }),
+        }),
+      ],
+    });
+    const test = setup({
+      extensions: [picture],
+      respond: toolThenAnswer(
+        fauxAssistantMessage(fauxToolCall("picture", {}), {
+          stopReason: "toolUse",
+        }),
+      ),
+    });
+    const { seen } = withEvents(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    await eventually(ended(seen));
+    expect(
+      eventsOf(seen).find(({ type }) => type === "tool_finished"),
+    ).toMatchObject({ name: "picture", output: "before after" });
+    await harness.close(context);
+  });
+
+  it("ends a run the adapter cancels as aborted", async () => {
     const held: { gate?: ReturnType<typeof gate> } = { gate: gate() };
     const test = setup({
       extensions: [holdTool(held)],
@@ -1392,64 +1474,96 @@ describe("progress", () => {
           stopReason: "toolUse",
         }),
     });
-    const { updates, started } = withProgress(test);
+    const { seen, started } = withEvents(test);
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
     await hub.start();
     await deliver(inbound("start", "evt-1"));
     await eventually(() =>
-      updates.some(({ update }) => update.type === "step"),
+      seen.some(({ event }) => event.type === "tool_started"),
     );
     const cancelled = started.cancel?.("thread-1");
     held.gate?.open();
     await cancelled;
     await harness.waitForIdle(context);
-    await eventually(() =>
-      updates.some(({ update }) => update.type === "stopped"),
-    );
-    const seen = updates.map(({ update }) => update);
-    expect(seen.slice(0, 2)).toEqual([
-      { type: "working" },
-      {
-        type: "step",
-        step: { id: expect.any(String), title: "work", status: "in_progress" },
-      },
+    await eventually(ended(seen));
+    const events = eventsOf(seen);
+    expect(events.slice(0, 2)).toEqual([
+      { type: "run_started" },
+      { type: "tool_started", id: expect.any(String), name: "work", args: {} },
     ]);
-    expect(seen.at(-1)).toEqual({ type: "stopped", reason: "aborted" });
+    expect(events.at(-1)).toEqual({ type: "run_ended", outcome: "aborted" });
     expect(test.adapter.sent).toEqual([]);
     await harness.close(context);
   });
 
-  it("reports a throwing progress as an adapter error with its channel and address", async () => {
+  it("ends a run the model fails as failed", async () => {
+    const test = setup({
+      respond: () =>
+        fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "model down",
+        }),
+    });
+    const { seen } = withEvents(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    await eventually(ended(seen));
+    expect(eventsOf(seen)).toEqual([
+      { type: "run_started" },
+      { type: "run_ended", outcome: "failed" },
+    ]);
+    await harness.close(context);
+  });
+
+  it("reports a throwing events as an adapter error with its channel and address", async () => {
     const test = setup();
-    test.adapter.progress = () => {
+    test.adapter.events = () => {
       throw new Error("render failed");
     };
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
     await hub.start();
     await deliver(inbound("hello", "evt-1"));
     await harness.waitForIdle(context);
-    await eventually(() =>
-      test.channelReports.some(({ kind }) => kind === "adapter_error"),
+    await eventually(
+      () =>
+        test.channelReports.filter(({ kind }) => kind === "adapter_error")
+          .length === 2,
     );
     expect(
-      test.channelReports.find(({ kind }) => kind === "adapter_error"),
-    ).toEqual({
-      kind: "adapter_error",
-      channel: "web",
-      address: "thread-1",
-      error: new Error("render failed"),
-    });
+      test.channelReports.filter(({ kind }) => kind === "adapter_error"),
+    ).toEqual(
+      ["run_started", "run_ended"].map(() => ({
+        kind: "adapter_error",
+        channel: "web",
+        address: "thread-1",
+        error: new Error("render failed"),
+      })),
+    );
     expect(test.adapter.sent).toHaveLength(1);
     await harness.close(context);
   });
 
-  it("reports nothing for channels without progress", async () => {
-    const test = setup();
-    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+  it("sends no events to channels without events", async () => {
+    const watching = testAdapter();
+    const quiet = testAdapter();
+    const seen: ChannelEvent[] = [];
+    watching.events = (_target, event) => {
+      seen.push(event);
+    };
+    const test = setup({
+      channels: {
+        web: { adapter: watching, conversation: createWeb },
+        chat: { adapter: quiet, conversation: createWeb },
+      },
+    });
+    const { harness, hub } = await test.open(new MemoryStorage());
     await hub.start();
-    await deliver(inbound("hello", "evt-1"));
+    await hub.deliver("chat", inbound("hello", "evt-1"));
     await harness.waitForIdle(context);
-    expect(test.adapter.sent).toHaveLength(1);
+    expect(quiet.sent).toHaveLength(1);
+    expect(seen).toEqual([]);
     await harness.close(context);
   });
 });

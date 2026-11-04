@@ -99,7 +99,7 @@ export function slackChannel(options: SlackOptions): SlackChannel {
           })
         : new Response("Service Unavailable", { status: 503 }),
     send: replies.send,
-    progress: replies.progress,
+    events: replies.events,
     fetchFile: (url) => fetchSlackFile(url, files),
   };
 }

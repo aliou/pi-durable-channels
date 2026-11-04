@@ -65,13 +65,13 @@ function generating(graph: TaskGraph): Set<ConversationId> {
   );
 }
 
-export type ProgressWatch = { stop(): Promise<void> };
+export type EventsWatch = { stop(): Promise<void> };
 
-export async function watchProgress(
+export async function watchEvents(
   harness: Harness,
   adapterFor: AdapterLookup,
   report: Reporter,
-): Promise<ProgressWatch> {
+): Promise<EventsWatch> {
   let stopped = false;
   const followers = new Map<ConversationId, Promise<Follower | undefined>>();
   const graph = await harness.watchTaskGraph(context);

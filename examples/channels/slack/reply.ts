@@ -1,6 +1,6 @@
 import type {
+  ChannelEvent,
   OutboundMessage,
-  ReplyProgress,
   ReplyTarget,
   SendContext,
   SendResult,
@@ -8,7 +8,7 @@ import type {
 import { compile, obj, opt, str } from "@earendil-works/pi-schema";
 import type { SlackCall } from "./api";
 import type { Naming } from "./naming";
-import { createPlans } from "./plan";
+import { createPlans, titleOf } from "./plan";
 import { type SessionStatus, setSessionStatus } from "./session";
 import { slackTarget, type Thread, threadOf } from "./target";
 
@@ -83,28 +83,73 @@ export function slackReplies(call: SlackCall, naming: Naming) {
     return result;
   }
 
-  async function progress(
-    target: ReplyTarget,
-    update: ReplyProgress,
-  ): Promise<void> {
-    const thread = threadOf(target);
-    if (thread === undefined) return;
+  const narration = new Map<string, string>();
+
+  function started(target: ReplyTarget, thread: Thread) {
     const requester = requesterOf(target.replyContext);
-    if (update.type === "working") {
-      const title = naming.initial(requester?.request);
-      return status(thread, "processing", {
-        ...(requester === undefined ? {} : { initiator: requester.user }),
-        ...(title === undefined ? {} : { title }),
-      });
-    }
-    if (update.type === "step")
-      return plans.step(target.idempotencyKey, thread, update.step);
-    const failed = update.reason === "failed";
+    const title = naming.initial(requester?.request);
+    return status(thread, "processing", {
+      ...(requester === undefined ? {} : { initiator: requester.user }),
+      ...(title === undefined ? {} : { title }),
+    });
+  }
+
+  function toolStarted(
+    key: string,
+    thread: Thread,
+    name: string,
+    id: string,
+    args: unknown,
+  ) {
+    const details = narration.get(key);
+    narration.delete(key);
+    plans.step(key, thread, {
+      id,
+      title: titleOf(name, args),
+      status: "in_progress",
+      ...(details === undefined ? {} : { details }),
+    });
+  }
+
+  async function ended(
+    key: string,
+    thread: Thread,
+    outcome: "completed" | "failed" | "aborted",
+  ) {
+    narration.delete(key);
+    if (outcome === "completed") return;
+    const failed = outcome === "failed";
     await plans
-      .finish(target.idempotencyKey, failed ? "failed" : "stopped")
+      .finish(key, failed ? "failed" : "stopped")
       .catch(report("plan"));
     await status(thread, failed ? "suspended" : "active");
   }
 
-  return { send, progress };
+  async function events(
+    target: ReplyTarget,
+    event: ChannelEvent,
+  ): Promise<void> {
+    const thread = threadOf(target);
+    if (thread === undefined) return;
+    const key = target.idempotencyKey;
+    switch (event.type) {
+      case "run_started":
+        return started(target, thread);
+      case "text":
+        narration.set(key, event.text);
+        return;
+      case "tool_started":
+        return toolStarted(key, thread, event.name, event.id, event.args);
+      case "tool_finished":
+        return plans.finishStep(
+          key,
+          event.id,
+          event.isError ? "error" : "complete",
+        );
+      case "run_ended":
+        return ended(key, thread, event.outcome);
+    }
+  }
+
+  return { send, events };
 }

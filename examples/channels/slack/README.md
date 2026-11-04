@@ -73,12 +73,15 @@ inbound event
   core: fetchFile(url) for each file (files.ts) → saved in the conversation's env, images inline
   socketMode: acknowledge the envelope after deliver; a failed deliver is redelivered by Slack
 
-progress(target, update) (reply.ts)
-  working → agents.sessions.setStatus processing, with the request as the title of a new session (session.ts)
-  step    → first step: chat.postMessage in the thread with a plan block titled "Working…" (plan.ts)
-            later steps: chat.update, at most every 2 s; one task per tool call, in progress, then complete or
-            error; the text before a call is its details; past 50 tasks, the middle folds into "… N more steps"
-  stopped → plan titled "Stopped after N steps" or "Failed after N steps", session active (aborted) or suspended
+events(target, event) (reply.ts)
+  run_started   → agents.sessions.setStatus processing, with the request as the title of a new session (session.ts)
+  text          → kept as the details of the next step
+  tool_started  → first step: chat.postMessage in the thread with a plan block titled "Working…" (plan.ts)
+                  later steps: chat.update, at most every 2 s; one task per tool call, titled from its name and first
+                  string argument; past 50 tasks, the middle folds into "… N more steps"
+  tool_finished → the step's task complete or error
+  run_ended     → failed or aborted: plan titled "Stopped after N steps" or "Failed after N steps", session active
+                  (aborted) or suspended; completed: nothing, send already finished the plan
 
 send(reply, ctx) (reply.ts)
   no text (no_reply)  → delete the plan message, set the session active; post nothing

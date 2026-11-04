@@ -1,4 +1,3 @@
-import type { ReplyStep } from "@aliou/pi-durable-channels";
 import { compile, obj, str } from "@earendil-works/pi-schema";
 import type { SlackCall } from "./api";
 import type { Thread } from "./target";
@@ -9,8 +8,16 @@ const HEAD_TASKS = 10;
 const MAX_DETAILS = 300;
 const WORKING = "Working…";
 const MAX_FINISHED = 1000;
+const MAX_TITLE = 60;
 
 const Posted = compile(obj({ ts: str() }, { open: true }));
+
+export type PlanStep = {
+  id: string;
+  title: string;
+  status: "in_progress" | "complete" | "error";
+  details?: string;
+};
 
 export type PlanOutcome = "done" | "stopped" | "failed";
 
@@ -24,11 +31,23 @@ const TITLES: Readonly<Record<PlanOutcome, (steps: number) => string>> = {
 type Plan = {
   thread: Thread;
   title: string;
-  steps: Map<string, ReplyStep>;
+  steps: Map<string, PlanStep>;
   ts?: string;
   chain: Promise<void>;
   timer?: ReturnType<typeof setTimeout>;
 };
+
+function oneLine(value: string): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > MAX_TITLE ? `${flat.slice(0, MAX_TITLE)}…` : flat;
+}
+
+export function titleOf(name: string, args: unknown): string {
+  const values =
+    typeof args === "object" && args !== null ? Object.values(args) : [];
+  const first = values.find((value) => typeof value === "string");
+  return typeof first === "string" ? oneLine(`${name} ${first}`) : name;
+}
 
 function richText(text: string) {
   const cut =
@@ -41,7 +60,7 @@ function richText(text: string) {
   };
 }
 
-function taskOf(step: ReplyStep) {
+function taskOf(step: PlanStep) {
   return {
     task_id: step.id,
     title: step.title,
@@ -50,7 +69,7 @@ function taskOf(step: ReplyStep) {
   };
 }
 
-function tasksOf(steps: readonly ReplyStep[]) {
+function tasksOf(steps: readonly PlanStep[]) {
   if (steps.length <= MAX_TASKS) return steps.map(taskOf);
   const tail = steps.slice(steps.length - (MAX_TASKS - HEAD_TASKS - 1));
   const hidden = steps.length - HEAD_TASKS - tail.length;
@@ -66,7 +85,7 @@ function tasksOf(steps: readonly ReplyStep[]) {
   ];
 }
 
-function settle(steps: Map<string, ReplyStep>, outcome: PlanOutcome): void {
+function settle(steps: Map<string, PlanStep>, outcome: PlanOutcome): void {
   const status = outcome === "done" ? "complete" : "error";
   for (const [id, step] of steps)
     if (step.status === "in_progress") steps.set(id, { ...step, status });
@@ -103,7 +122,7 @@ export function createPlans(
     plan.chain = plan.chain.then(() => flush(plan)).catch(onError);
   }
 
-  function step(key: string, thread: Thread, value: ReplyStep): void {
+  function step(key: string, thread: Thread, value: PlanStep): void {
     if (finished.has(key)) return;
     const known = plans.get(key);
     const plan: Plan = known ?? {
@@ -122,6 +141,17 @@ export function createPlans(
       plan.timer = undefined;
       queue(plan);
     }, FLUSH_MS);
+  }
+
+  function finishStep(
+    key: string,
+    id: string,
+    status: PlanStep["status"],
+  ): void {
+    const plan = plans.get(key);
+    const known = plan?.steps.get(id);
+    if (plan === undefined || known === undefined) return;
+    step(key, plan.thread, { id, title: known.title, status });
   }
 
   function markFinished(key: string): void {
@@ -154,5 +184,5 @@ export function createPlans(
     await call("chat.delete", { channel: plan.thread.channel, ts: plan.ts });
   }
 
-  return { step, finish, discard };
+  return { step, finishStep, finish, discard };
 }

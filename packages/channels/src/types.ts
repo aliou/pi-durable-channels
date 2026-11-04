@@ -1,4 +1,5 @@
 import type { JsonValue } from "@earendil-works/chord";
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   ConversationId,
@@ -59,17 +60,18 @@ export type ReplyTarget = {
   idempotencyKey: string;
 };
 
-export type ReplyStep = {
-  id: string;
-  title: string;
-  status: "in_progress" | "complete" | "error";
-  details?: string;
-};
-
-export type ReplyProgress =
-  | { type: "working" }
-  | { type: "step"; step: ReplyStep }
-  | { type: "stopped"; reason: "failed" | "aborted" };
+export type ChannelEvent =
+  | { type: "run_started" }
+  | { type: "text"; id: string; text: string }
+  | { type: "tool_started"; id: string; name: string; args: JsonObject }
+  | {
+      type: "tool_finished";
+      id: string;
+      name: string;
+      isError: boolean;
+      output: string;
+    }
+  | { type: "run_ended"; outcome: "completed" | "failed" | "aborted" };
 
 export type AdapterReport =
   | { kind: "skipped"; detail: string }
@@ -110,7 +112,7 @@ export type ChannelAdapter = {
     message: OutboundMessage,
     ctx: SendContext,
   ): Promise<SendResult | undefined | void>;
-  progress?(target: ReplyTarget, update: ReplyProgress): void | Promise<void>;
+  events?(target: ReplyTarget, event: ChannelEvent): void | Promise<void>;
   fetchFile?(url: string): Promise<Uint8Array>;
 };
 

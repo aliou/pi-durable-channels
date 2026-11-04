@@ -63,8 +63,12 @@ adapter (socket event, HTTP request, file)   verify, parse
   → onReport ignored → undefined when no conversation takes the address
 
 conversation runs (queue or steer, model, tools)
-  progress watcher (adapters with progress)
-    run starts → progress(target, working); each tool call → progress(target, step); failure or abort → stopped
+  events watcher (adapters with events), after each commit
+    new recipient        → events(target, run_started)
+    assistant text+tools → events(target, text) when a call is not no_reply; events(target, tool_started) per call
+    tool result          → events(target, tool_finished)
+    run gone             → events(target, run_ended completed | failed | aborted)
+    events throws        → onReport adapter_error
   afterRun hook
     one channels.send task per channel.message entry in the run
       adapter.send(reply, { replyContext, addressData, idempotencyKey: reply:<entry> })
@@ -92,7 +96,7 @@ type ChannelAdapter = {
   stop?(): Promise<void>;
   fetch?(request): Promise<Response>;
   send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
-  progress?(target, update): void | Promise<void>;
+  events?(target, event): void | Promise<void>;
   fetchFile?(url): Promise<Uint8Array>;
 };
 ```
@@ -100,7 +104,10 @@ type ChannelAdapter = {
 `start` opens the adapter's inbound transport and resolves once it is ready; a rejection fails `hub.start()`. `stop`
 resolves once the transport is closed. `signal` aborts when the hub stops, to cancel calls in flight. `start` keeps `deliver`, `cancel`, and `report`. `report` sends `skipped`
 and `adapter_error` reports to the host's `onReport`; adapters use it instead of the console. HTTP adapters implement `fetch`, which
-the host mounts at a URL of its choosing; socket and polling adapters leave it out. `progress` drives typing indicators, session status, or a timeline of tool calls. `fetchFile`
+the host mounts at a URL of its choosing; socket and polling adapters leave it out. `events` receives a run's activity for each address it answers: `run_started`, narration `text`, `tool_started`,
+`tool_finished`, and `run_ended` with its outcome, in commit order. Adapters use it for typing indicators, session
+status, or a timeline of tool calls. Events are best effort and can repeat after a restart; each carries an ID to
+deduplicate. `fetchFile`
 downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
 the host's `env` builder: `channels.hub(harness, { env })`. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and
 testing.
@@ -109,8 +116,8 @@ testing.
 
 | Method | Effect |
 | --- | --- |
-| `start()` | Start every adapter with a `deliver`, `cancel`, and `report` bound to its channel, and watch runs for `progress`; resolves once every adapter is ready. A hub starts once |
-| `stop()` | Reject further changes, wait for deliveries in flight, stop the progress watcher, then abort the adapters' signal and await their `stop` |
+| `start()` | Start every adapter with a `deliver`, `cancel`, and `report` bound to its channel, and watch runs for `events`; resolves once every adapter is ready. A hub starts once |
+| `stop()` | Reject further changes, wait for deliveries in flight, stop the events watcher, then abort the adapters' signal and await their `stop` |
 | `deliver(channel, message, options?)` | Admit a message; resolves once it is stored |
 | `bind(target, conversationId)` | Attach an address to a conversation |
 | `addresses(conversationId)` | Every address bound to the conversation, aliases included |
