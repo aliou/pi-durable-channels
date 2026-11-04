@@ -7,6 +7,7 @@ import {
   createRegistry,
   type Extension,
   Harness,
+  type HarnessOptions,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { serve } from "./serve";
@@ -18,6 +19,7 @@ export type RunOptions = {
   channels: Channels;
   models: Models;
   extensions: readonly Extension[];
+  env?: HarnessOptions["env"];
   routes?: Record<string, Route>;
 };
 
@@ -45,12 +47,13 @@ export async function run(options: RunOptions): Promise<void> {
     {
       models: options.models,
       registry,
+      env: options.env,
       onReport: (report) => console.error(report.kind, report.error),
     },
     BACKGROUND_CONTEXT,
   );
   harness.resume();
-  const hub = options.channels.hub(harness);
+  const hub = options.channels.hub(harness, { env: options.env });
   const stop = new AbortController();
   await hub.start(stop.signal);
   if (options.routes !== undefined) serveRoutes(options.routes, hub);
