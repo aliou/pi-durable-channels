@@ -29,6 +29,7 @@ import {
   fakeGitHub,
   payloads,
   SECRET,
+  served,
   webhook,
 } from "@examples/github-channel/test/fake-github";
 import { afterEach, describe, expect, it } from "vitest";
@@ -127,7 +128,15 @@ async function open() {
   );
   const hub = factory.channels.hub(harness, { env: workspace.env });
   await hub.start();
-  return { faux, harness, hub, github, slackPosts, remote, ...api };
+  return {
+    faux,
+    harness,
+    hub,
+    github: served(github),
+    slackPosts,
+    remote,
+    ...api,
+  };
 }
 
 const comments = (calls: Call[]) =>
@@ -173,10 +182,10 @@ describe("software factory", () => {
       "Opened https://github.com/acme/app/pull/7",
     );
 
-    await github.fetch(
+    await github(
       webhook("issue_comment", payloads.comment(7, "please rename")),
     );
-    await github.fetch(webhook("issue_comment", payloads.comment(99, "hi")));
+    await github(webhook("issue_comment", payloads.comment(99, "hi")));
     await harness.waitForIdle(context);
     expect(comments(calls)).toEqual([
       {
@@ -195,7 +204,7 @@ describe("software factory", () => {
       turn("label_issue", { issue: 3, labels: ["cannot-reproduce"] }),
       fauxAssistantMessage("Could not reproduce: save returns 1."),
     ]);
-    await github.fetch(webhook("issues", payloads.issueOpened(3)));
+    await github(webhook("issues", payloads.issueOpened(3)));
     await harness.waitForIdle(context);
     expect(calls.filter(({ method }) => method === "POST")).toEqual([
       expect.objectContaining({

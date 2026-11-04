@@ -4,7 +4,7 @@ import {
   createChannels,
 } from "@aliou/pi-durable-channels";
 import { loadModel } from "@examples/shared/model";
-import { type Route, run } from "@examples/shared/run";
+import { adapterRoute, type Route, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
 import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
 import { stripeEvents } from "./events";
@@ -68,7 +68,9 @@ const channels = createChannels({
 
 const routes: Record<string, Route> = {
   "POST /stripe/webhook": stripeEvents({ webhookSecret, slackChannelId }),
-  "POST /slack/events": (request) => slack.fetch(request),
+  ...(transport.kind === "http"
+    ? { "POST /slack/events": adapterRoute(slack) }
+    : {}),
 };
 
 await run({

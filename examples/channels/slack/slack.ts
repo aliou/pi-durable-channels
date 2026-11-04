@@ -30,10 +30,6 @@ export type SlackOptions = {
   maxBodyBytes?: number;
 };
 
-export type SlackChannel = ChannelAdapter & {
-  fetch(request: Request): Promise<Response>;
-};
-
 const SLACK_API = "https://slack.com/api";
 const SLACK_FILES = "https://files.slack.com";
 const MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -41,7 +37,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 
 const Auth = compile(obj({ user_id: str() }, { open: true }));
 
-export function slackChannel(options: SlackOptions): SlackChannel {
+export function slackChannel(options: SlackOptions): ChannelAdapter {
   const apiUrl = options.apiUrl ?? SLACK_API;
   const call = slackApi(options.botToken, apiUrl);
   const { transport } = options;
@@ -55,6 +51,15 @@ export function slackChannel(options: SlackOptions): SlackChannel {
     maxBytes: options.maxFileBytes ?? MAX_FILE_BYTES,
   };
   let onHttpEvent: OnEvent | undefined;
+
+  const receive = async (request: Request) =>
+    transport.kind === "http" && onHttpEvent !== undefined
+      ? receiveHttp(request, {
+          signingSecret: transport.signingSecret,
+          onEvent: onHttpEvent,
+          maxBodyBytes: options.maxBodyBytes ?? MAX_BODY_BYTES,
+        })
+      : new Response("Service Unavailable", { status: 503 });
 
   function receiver(ctx: AdapterStart, botUserId: string): OnEvent {
     return async (event) => {
@@ -90,14 +95,7 @@ export function slackChannel(options: SlackOptions): SlackChannel {
           signal: ctx.signal,
         });
     },
-    fetch: async (request) =>
-      transport.kind === "http" && onHttpEvent !== undefined
-        ? receiveHttp(request, {
-            signingSecret: transport.signingSecret,
-            onEvent: onHttpEvent,
-            maxBodyBytes: options.maxBodyBytes ?? MAX_BODY_BYTES,
-          })
-        : new Response("Service Unavailable", { status: 503 }),
+    ...(transport.kind === "http" ? { fetch: receive } : {}),
     send: replies.send,
     events: replies.events,
     fetchFile: (url) => fetchSlackFile(url, files),

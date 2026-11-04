@@ -18,9 +18,5 @@ export {
   personalToken,
 } from "./auth";
 export { type GitHubEvent, type GitHubInbound, inboundOf } from "./events";
-export {
-  type GitHubChannel,
-  type GitHubOptions,
-  githubChannel,
-} from "./github";
+export { type GitHubOptions, githubChannel } from "./github";
 export { verifyGitHubSignature } from "./verify";

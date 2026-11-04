@@ -7,7 +7,7 @@ inbox; the agent decides what is noise, what is worth a note, and what needs a p
 
 ```text
 service → POST /inbox?source=<name>  (any body)
-  inbox.fetch (adapter.ts), mounted by index.ts
+  inbox.fetch (adapter.ts), mounted by index.ts through adapterRoute (shared/run.ts)
     requestId = delivery header, else sha256 of the body
     deliver({ address: source, text: headers + body })  → 202
   source conversation runs with instructions.md

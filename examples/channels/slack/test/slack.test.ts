@@ -28,8 +28,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ThreadMessages } from "../events";
 import type { NameThread } from "../naming";
 import { slackChannel } from "../slack";
-import { httpEvents } from "../transport";
-import { type Call, fakeSlack, message, SECRET, signed } from "./fake-slack";
+import { httpEvents, socketMode } from "../transport";
+import {
+  type Call,
+  fakeSlack,
+  message,
+  SECRET,
+  served,
+  signed,
+} from "./fake-slack";
 
 const FILES = {
   "/files/cat.png": "png-bytes",
@@ -159,9 +166,10 @@ async function open(options: OpenOptions = {}) {
     context,
   );
   const hub = channels.hub(harness, { env: options.env });
+  const post = served(slack);
   const event = (body: Record<string, unknown>) =>
-    slack.fetch(signed({ type: "event_callback", team_id: "T1", event: body }));
-  return { slack, hub, harness, seen, event, ...slackApi };
+    post(signed({ type: "event_callback", team_id: "T1", event: body }));
+  return { post, hub, harness, seen, event, ...slackApi };
 }
 
 const posts = (calls: Call[]) =>
@@ -176,25 +184,33 @@ const methods = (calls: Call[]) =>
 
 describe("slack channel end to end", () => {
   it("answers 503 before start", async () => {
-    const { slack, harness } = await open();
-    const response = await slack.fetch(signed({ type: "url_verification" }));
+    const { post, harness } = await open();
+    const response = await post(signed({ type: "url_verification" }));
     expect(response.status).toBe(503);
     await harness.close(context);
   });
 
+  it("serves no requests over Socket Mode", () => {
+    const slack = slackChannel({
+      botToken: "xoxb-test",
+      transport: socketMode("xapp-test"),
+    });
+    expect(slack.fetch).toBeUndefined();
+  });
+
   it("opens a case thread, then follows the thread: notes as context, mentions as questions", async () => {
-    const { slack, hub, harness, calls, seen } = await open();
+    const { post, hub, harness, calls, seen } = await open();
     await hub.start();
     expect(calls[0]).toMatchObject({
       method: "auth.test",
       token: "Bearer xoxb-test",
     });
 
-    const challenge = await slack.fetch(
+    const challenge = await post(
       signed({ type: "url_verification", challenge: "c-1" }),
     );
     await expect(challenge.json()).resolves.toEqual({ challenge: "c-1" });
-    const forged = await slack.fetch(
+    const forged = await post(
       signed({ type: "url_verification", challenge: "c-1" }, { secret: "x" }),
     );
     expect(forged.status).toBe(401);
@@ -221,7 +237,7 @@ describe("slack channel end to end", () => {
     ]);
 
     const event = (fields: Record<string, unknown>) =>
-      slack.fetch(
+      post(
         signed({
           type: "event_callback",
           event_id: "Ev1",

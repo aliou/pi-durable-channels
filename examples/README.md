@@ -22,8 +22,8 @@ Runnable agents built on the channels.
 | `@examples/generic-webhook-agent` | `use-cases/generic-webhook-agent/` | On-call first responder: triages any webhook and pages when it matters |
 | `@examples/software-factory` | `use-cases/software-factory/` | Coding agents: Slack requests become pull requests they follow; new issues get triaged |
 
-`use-cases/shared/` (`@examples/shared`) holds what the use cases have in common: the runner, the model loader, and the
-console or HTTP sink. Channel packages depend on nothing here, so each one can be copied on its own.
+`use-cases/shared/` (`@examples/shared`) holds what the use cases have in common: the runner, which serves
+any HTTP adapter through `adapterRoute(adapter)`, the model loader, and the console or HTTP sink. Channel packages depend on nothing here, so each one can be copied on its own.
 
 ```sh
 nix develop -c pnpm install

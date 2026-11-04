@@ -12,7 +12,8 @@ const slack = slackChannel({
   transport: socketMode(appToken),
   nameThread: async ({ request, answer }) => "Fix stale README claims", // optional, e.g. one small model call
 });
-// or transport: httpEvents(signingSecret), and mount slack.fetch at the Event Subscriptions URL
+// or transport: httpEvents(signingSecret), and mount slack.fetch at the Event Subscriptions URL;
+// over Socket Mode the adapter has no fetch
 const channels = createChannels({ channels: { slack: { adapter: slack, conversation } } });
 await channels.hub(harness, { env }).start();
 ```

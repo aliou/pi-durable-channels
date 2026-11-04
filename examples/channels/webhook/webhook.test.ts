@@ -1,6 +1,7 @@
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
+  type ChannelAdapter,
   createChannels,
   type Deliver,
   type DeliveryReceipt,
@@ -86,6 +87,13 @@ const message = {
   author: "ana",
 };
 
+function served(
+  adapter: ChannelAdapter,
+): (request: Request) => Promise<Response> {
+  if (adapter.fetch === undefined) throw new Error("The adapter has no fetch");
+  return adapter.fetch;
+}
+
 describe("webhook fetch", () => {
   const adapter = webhook({
     verify: bearerToken("s3cret-s3cret-s3cret"),
@@ -100,13 +108,13 @@ describe("webhook fetch", () => {
         report: () => undefined,
         signal: new AbortController().signal,
       });
-      return adapter.fetch(request);
+      return served(adapter)(request);
     },
   };
 
   it("answers 503 until the hub starts the adapter", async () => {
     const idle = webhook({ verify: () => true, allowedOrigins: [] });
-    const response = await idle.fetch(post(JSON.stringify(message)));
+    const response = await served(idle)(post(JSON.stringify(message)));
     expect(response.status).toBe(503);
   });
 
@@ -362,9 +370,10 @@ describe("webhook channel end to end", () => {
     await hub.start();
 
     const body = JSON.stringify({ ...message, replyUrl: `${origin}/reply` });
-    const first = await web.fetch(post(body));
-    const retry = await web.fetch(post(body));
-    const forged = await web.fetch(post(body, "guess"));
+    const receive = served(web);
+    const first = await receive(post(body));
+    const retry = await receive(post(body));
+    const forged = await receive(post(body, "guess"));
     expect([first.status, retry.status, forged.status]).toEqual([
       202, 202, 401,
     ]);

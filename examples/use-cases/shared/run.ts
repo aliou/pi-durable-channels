@@ -1,6 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { Channels, ChannelsHub } from "@aliou/pi-durable-channels";
+import type {
+  ChannelAdapter,
+  Channels,
+  ChannelsHub,
+} from "@aliou/pi-durable-channels";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
 import {
@@ -13,6 +17,12 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { serve } from "./serve";
 
 export type Route = (request: Request, hub: ChannelsHub) => Promise<Response>;
+
+export function adapterRoute(adapter: ChannelAdapter): Route {
+  const { fetch } = adapter;
+  if (fetch === undefined) throw new Error("This adapter serves no requests");
+  return (request) => fetch(request);
+}
 
 export type RunOptions = {
   name: string;

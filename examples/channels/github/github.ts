@@ -28,10 +28,6 @@ export type GitHubOptions = {
   debug?: boolean;
 };
 
-export type GitHubChannel = ChannelAdapter & {
-  fetch(request: Request): Promise<Response>;
-};
-
 const MAX_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_COMMENT = 65_000;
 
@@ -58,7 +54,7 @@ function textOf(message: OutboundMessage): string {
     .join("");
 }
 
-export function githubChannel(options: GitHubOptions): GitHubChannel {
+export function githubChannel(options: GitHubOptions): ChannelAdapter {
   const call = githubApi(options.auth.token, options.apiUrl ?? GITHUB_API);
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   let receiver: Receiver | undefined;

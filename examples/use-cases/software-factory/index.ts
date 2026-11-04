@@ -8,7 +8,7 @@ import {
 } from "@examples/github-channel";
 import { activityLog, logged } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
-import { run } from "@examples/shared/run";
+import { adapterRoute, run } from "@examples/shared/run";
 import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
 import { softwareFactory } from "./factory";
 import { threadNamer } from "./naming";
@@ -113,7 +113,9 @@ await run({
   extensions: factory.extensions,
   env: workspace.env,
   routes: {
-    "POST /slack/events": (request) => slack.fetch(request),
-    "POST /github/webhook": (request) => github.fetch(request),
+    ...(transport.kind === "http"
+      ? { "POST /slack/events": adapterRoute(slack) }
+      : {}),
+    "POST /github/webhook": adapterRoute(github),
   },
 });

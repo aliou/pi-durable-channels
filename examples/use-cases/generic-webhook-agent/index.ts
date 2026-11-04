@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createChannels } from "@aliou/pi-durable-channels";
 import { loadModel } from "@examples/shared/model";
-import { run } from "@examples/shared/run";
+import { adapterRoute, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
 import { inboxChannel } from "./adapter";
 import { responderTools as createResponderTools } from "./tools";
@@ -41,5 +41,5 @@ await run({
   channels,
   models,
   extensions: [responderTools],
-  routes: { "POST /inbox": (request) => inbox.fetch(request) },
+  routes: { "POST /inbox": adapterRoute(inbox) },
 });

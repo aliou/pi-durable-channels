@@ -4,10 +4,6 @@ import { postTo } from "@examples/shared/sink";
 
 export type InboxChannelOptions = { pagerUrl: string | undefined };
 
-export type InboxChannel = ChannelAdapter & {
-  fetch(request: Request): Promise<Response>;
-};
-
 const DELIVERY_ID_HEADERS = [
   "x-github-delivery",
   "webhook-id",
@@ -58,7 +54,7 @@ async function receive(request: Request, deliver: Deliver): Promise<Response> {
   return Response.json(receipt ?? { ignored: true }, { status: 202 });
 }
 
-export function inboxChannel(options: InboxChannelOptions): InboxChannel {
+export function inboxChannel(options: InboxChannelOptions): ChannelAdapter {
   let deliver: Deliver | undefined;
   return {
     start: (ctx) => {

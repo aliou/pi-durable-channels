@@ -60,11 +60,7 @@ function textOf(message: OutboundMessage): string {
     .join("");
 }
 
-export type WebhookChannel = ChannelAdapter & {
-  fetch(request: Request): Promise<Response>;
-};
-
-export function webhook(options: WebhookOptions): WebhookChannel {
+export function webhook(options: WebhookOptions): ChannelAdapter {
   const allowed = allowOrigins(options.allowedOrigins);
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;

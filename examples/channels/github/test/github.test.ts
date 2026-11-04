@@ -14,7 +14,13 @@ import {
 import { describe, expect, it } from "vitest";
 import { personalToken } from "../auth";
 import { githubChannel } from "../github";
-import { type Call, fakeGitHub, payloads, webhook } from "./fake-github";
+import {
+  type Call,
+  fakeGitHub,
+  payloads,
+  served,
+  webhook,
+} from "./fake-github";
 
 const MODEL = { provider: "faux", modelId: "faux-1" };
 
@@ -68,7 +74,7 @@ async function open(routes: Parameters<typeof fakeGitHub>[0] = {}) {
     context,
   );
   const hub = channels.hub(harness);
-  return { github, hub, harness, seen, ...api };
+  return { github: served(github), hub, harness, seen, ...api };
 }
 
 const comments = (calls: Call[]) =>
@@ -81,10 +87,10 @@ const comments = (calls: Call[]) =>
 describe("github channel end to end", () => {
   it("answers 503 before start and 401 for a bad signature", async () => {
     const { github, hub, harness } = await open();
-    const early = await github.fetch(webhook("ping", {}));
+    const early = await github(webhook("ping", {}));
     expect(early.status).toBe(503);
     await hub.start();
-    const forged = await github.fetch(webhook("ping", {}, { secret: "other" }));
+    const forged = await github(webhook("ping", {}, { secret: "other" }));
     expect(forged.status).toBe(401);
     await harness.close(context);
   });
@@ -107,15 +113,13 @@ describe("github channel end to end", () => {
     const unbound = webhook("issue_comment", payloads.comment(9, "hi"));
     const statuses: number[] = [];
     for (const request of [opened, redelivered, unbound]) {
-      const response = await github.fetch(request);
+      const response = await github(request);
       statuses.push(response.status);
     }
     expect(statuses).toEqual([202, 202, 202]);
     await harness.waitForIdle(context);
 
-    await github.fetch(
-      webhook("issue_comment", payloads.comment(3, "still broken")),
-    );
+    await github(webhook("issue_comment", payloads.comment(3, "still broken")));
     await harness.waitForIdle(context);
 
     expect(comments(calls)).toEqual([
@@ -156,15 +160,15 @@ describe("github channel end to end", () => {
       }),
     });
     await hub.start();
-    await github.fetch(webhook("issues", payloads.issueOpened(5)));
+    await github(webhook("issues", payloads.issueOpened(5)));
     await harness.waitForIdle(context);
-    await github.fetch(
+    await github(
       webhook(
         "pull_request_review",
         payloads.review(5, "CHANGES_REQUESTED", "see notes"),
       ),
     );
-    await github.fetch(
+    await github(
       webhook(
         "pull_request_review_comment",
         payloads.reviewComment(5, "rename"),

@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { ChannelAdapter } from "@aliou/pi-durable-channels";
 import { afterEach } from "vitest";
 
 export const SECRET = "slack-signing-secret";
@@ -84,3 +85,10 @@ export const message = (fields: Record<string, unknown>) => ({
   text: "hello",
   ...fields,
 });
+
+export function served(
+  adapter: ChannelAdapter,
+): (request: Request) => Promise<Response> {
+  if (adapter.fetch === undefined) throw new Error("The adapter has no fetch");
+  return adapter.fetch;
+}
