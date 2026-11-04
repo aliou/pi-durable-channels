@@ -2,6 +2,7 @@ import { copyJson, type JsonValue } from "@earendil-works/chord";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
 import { defineTask } from "@earendil-works/pi-durable";
 import { ChannelsDoc, findBinding, setBinding } from "./doc";
+import type { Reporter } from "./report";
 import type {
   ChannelAdapter,
   OutboundPart,
@@ -72,7 +73,11 @@ async function recordResult(
     setBinding(state, alias, binding());
 }
 
-export function defineSendTask(adapterFor: AdapterLookup, retry: SendRetry) {
+export function defineSendTask(
+  adapterFor: AdapterLookup,
+  retry: SendRetry,
+  report: Reporter,
+) {
   return defineTask<SendInput, SendState, null>({
     name: SEND_TASK,
     version: 1,
@@ -107,7 +112,10 @@ export function defineSendTask(adapterFor: AdapterLookup, retry: SendRetry) {
           }, context);
           return;
         }
+        const { channel, address } = task.input;
+        const { error } = outcome;
         if (attempt < retry.attempts) {
+          report({ kind: "send_retry", channel, address, attempt, error });
           const until = runtime.now() + retry.baseDelayMs * 2 ** (attempt - 1);
           await runtime.sleepUntil(
             until,
@@ -116,10 +124,13 @@ export function defineSendTask(adapterFor: AdapterLookup, retry: SendRetry) {
           );
           return;
         }
-        runtime.report(outcome.error);
-        const error = { message: outcome.error.message };
+        report({ kind: "send_failed", channel, address, error });
+        const failure = { message: error.message };
         await runtime.commit(
-          () => ({ status: "terminal", outcome: { status: "failed", error } }),
+          () => ({
+            status: "terminal",
+            outcome: { status: "failed", error: failure },
+          }),
           context,
         );
       },

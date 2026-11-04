@@ -31,6 +31,7 @@ import { afterEach } from "vitest";
 import {
   type ChannelAdapter,
   type ChannelRegistration,
+  type ChannelReport,
   type Channels,
   type ChannelsHub,
   type ChannelsOptions,
@@ -180,11 +181,16 @@ export type SetupOptions = Partial<ChannelsOptions> & {
 
 export function setup(options: SetupOptions = {}) {
   const adapter = testAdapter();
+  const channelReports: ChannelReport[] = [];
   const channelsOptions: ChannelsOptions = {
     channels: options.channels ?? {
       web: { adapter, conversation: options.conversation ?? createWeb },
     },
     retry: options.retry ?? { attempts: 3, baseDelayMs: 1 },
+    onReport: (report) => {
+      channelReports.push(report);
+      options.onReport?.(report);
+    },
     ...(options.whenBusy === undefined ? {} : { whenBusy: options.whenBusy }),
   };
   const channels = createChannels(channelsOptions);
@@ -230,7 +236,7 @@ export function setup(options: SetupOptions = {}) {
     return { harness, hub, deliver };
   }
 
-  return { adapter, channels, state, open, reports };
+  return { adapter, channels, state, open, reports, channelReports };
 }
 
 export async function accepted<T>(receipt: Promise<T | undefined>): Promise<T> {

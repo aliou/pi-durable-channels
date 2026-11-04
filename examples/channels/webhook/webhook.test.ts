@@ -97,6 +97,7 @@ describe("webhook fetch", () => {
       await adapter.start?.({
         ...ctx,
         cancel: async () => undefined,
+        report: () => undefined,
         signal: new AbortController().signal,
       });
       return adapter.fetch(request);

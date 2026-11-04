@@ -71,9 +71,34 @@ export type ReplyProgress =
   | { type: "step"; step: ReplyStep }
   | { type: "stopped"; reason: "failed" | "aborted" };
 
+export type AdapterReport =
+  | { kind: "skipped"; detail: string }
+  | { kind: "adapter_error"; address?: string; error: unknown };
+
+export type ChannelReport =
+  | {
+      kind: "admitted";
+      channel: string;
+      address: string;
+      conversationId: ConversationId;
+      submissionId: SubmissionId;
+      duplicate: boolean;
+    }
+  | { kind: "ignored"; channel: string; address: string }
+  | {
+      kind: "send_retry";
+      channel: string;
+      address: string;
+      attempt: number;
+      error: unknown;
+    }
+  | { kind: "send_failed"; channel: string; address: string; error: unknown }
+  | (AdapterReport & { channel: string });
+
 export type AdapterStart = {
   deliver: Deliver;
   cancel(address: string): Promise<void>;
+  report(report: AdapterReport): void;
   signal: AbortSignal;
 };
 
@@ -106,6 +131,7 @@ export type ChannelsOptions = {
   channels: Readonly<Record<string, ChannelRegistration>>;
   whenBusy?: BusyPolicy;
   retry?: SendRetry;
+  onReport?(report: ChannelReport): void;
 };
 
 export type DeliveryStatus =

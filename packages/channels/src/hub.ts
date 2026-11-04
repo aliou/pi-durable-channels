@@ -17,6 +17,7 @@ import {
   setBinding,
 } from "./doc";
 import { watchProgress } from "./progress";
+import type { Reporter } from "./report";
 import type { AdapterLookup } from "./send";
 import { deliveryStatus } from "./status";
 import { messageData, submission } from "./submission";
@@ -53,6 +54,7 @@ export type HubSetup = {
   options: ChannelsOptions;
   registration(channel: string): ChannelRegistration;
   adapterFor: AdapterLookup;
+  report: Reporter;
   env: EnvBuilder | undefined;
 };
 
@@ -103,7 +105,10 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
   ): Promise<DeliveryReceipt | undefined> {
     const create = options.run && options.create;
     const conversationId = await conversationFor(key, message, create);
-    if (conversationId === undefined) return undefined;
+    if (conversationId === undefined) {
+      setup.report({ kind: "ignored", ...key });
+      return undefined;
+    }
     const conversation = await harness.conversation(conversationId, context);
     if (conversation === undefined)
       throw new Error(`Conversation ${conversationId} not found`);
@@ -117,12 +122,13 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
       },
       context,
     );
-    const submissionId = await harness.commit(async (tx) => {
+    const admitted = await harness.commit(async (tx) => {
       const known = await tx.submissionByRequest(
         conversationId,
         message.requestId,
       );
-      if (known !== undefined) return known.id;
+      if (known !== undefined)
+        return { submissionId: known.id, duplicate: true };
       const state = await tx.doc(ChannelsDoc);
       const stored = findBinding(state, key)?.addressData;
       if (message.addressData !== undefined) {
@@ -136,9 +142,11 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
         (stored === undefined ? undefined : copyJson(stored));
       const data = messageData(key, message, addressData);
       const draft = submission(message.requestId, content, data, options);
-      return conversation.submit(tx, draft);
+      const submissionId = await conversation.submit(tx, draft);
+      return { submissionId, duplicate: false };
     }, context);
-    return { submissionId, conversationId };
+    setup.report({ kind: "admitted", ...key, conversationId, ...admitted });
+    return { submissionId: admitted.submissionId, conversationId };
   }
 
   const deliver: ChannelsHub["deliver"] = async (channel, message, options) => {
@@ -155,12 +163,13 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
   async function start(signal = new AbortController().signal): Promise<void> {
     const channels = Object.entries(setup.options.channels);
     if (channels.some(([, { adapter }]) => adapter.progress !== undefined))
-      await watchProgress(harness, setup.adapterFor, signal);
+      await watchProgress(harness, setup.adapterFor, setup.report, signal);
     await Promise.all(
       channels.map(([channel, { adapter }]) =>
         adapter.start?.({
           deliver: (message, options) => deliver(channel, message, options),
           cancel: (address) => cancelAt({ channel, address }),
+          report: (report) => setup.report({ ...report, channel }),
           signal,
         }),
       ),

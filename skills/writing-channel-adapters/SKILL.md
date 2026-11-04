@@ -11,7 +11,12 @@ An adapter connects one platform to the channels core. The core owns conversatio
 
 ```ts
 type ChannelAdapter = {
-  start?(ctx: { deliver: Deliver; cancel(address: string): Promise<void>; signal: AbortSignal }): void | Promise<void>;
+  start?(ctx: {
+    deliver: Deliver;
+    cancel(address: string): Promise<void>;
+    report(report: AdapterReport): void;
+    signal: AbortSignal;
+  }): void | Promise<void>;
   fetch?(request: Request): Promise<Response>;
   send(message: OutboundMessage, ctx: SendContext): Promise<SendResult | undefined | void>;
   progress?(target: ReplyTarget, update: ReplyProgress): void | Promise<void>;
@@ -23,7 +28,8 @@ type ChannelAdapter = {
 - `deliver(message, { whenBusy?, run?, create? })` admits one inbound message. It resolves to a receipt, or to `undefined` when no conversation takes the address. `run: false` stores the message as context without a run or a reply, and never creates a conversation. `create: false` runs the message only on an address that already has a conversation; use it for chatter the agent may join but should never start a conversation from.
 - `send` posts one outbound message: a reply, or a `send_message` notification. Throwing retries it with backoff and the same `idempotencyKey`. A reply with no parts means the run chose not to answer (`no_reply`): post nothing, and clear any typing indicator, stream, or session status.
 - `cancel(address)` stops the run of the conversation bound to `address`, as `hub.cancel` does. Map a platform stop button to it.
-- `progress` reports a reply while the model works on it: `{ type: "working" }` when the run starts, `{ type: "step", step }` for each tool call (`{ id, title, status: "in_progress" | "complete" | "error", details? }`, where `details` is the text the model wrote before the call), and `{ type: "stopped", reason }` when the run fails or is aborted. Use it for typing indicators, session status, or a progress timeline. The answer's text is never streamed: text written before a tool call is narration, not the answer, and `send` delivers the answer whole. `target.idempotencyKey` equals the `idempotencyKey` the reply's `send` gets, so `send` can finish what progress opened instead of posting separately. A step can arrive after `send`; drop it. Progress is best effort: errors are ignored, nothing is stored, and after a crash `send` still posts the full answer.
+- `progress` reports a reply while the model works on it: `{ type: "working" }` when the run starts, `{ type: "step", step }` for each tool call (`{ id, title, status: "in_progress" | "complete" | "error", details? }`, where `details` is the text the model wrote before the call), and `{ type: "stopped", reason }` when the run fails or is aborted. Use it for typing indicators, session status, or a progress timeline. The answer's text is never streamed: text written before a tool call is narration, not the answer, and `send` delivers the answer whole. `target.idempotencyKey` equals the `idempotencyKey` the reply's `send` gets, so `send` can finish what progress opened instead of posting separately. A step can arrive after `send`; drop it. Progress is best effort: errors are reported as `adapter_error`, nothing is stored, and after a crash `send` still posts the full answer.
+- `report` hands the host a `{ kind: "skipped", detail }` for a platform event that maps to no message, or a `{ kind: "adapter_error", address?, error }` for a failure outside `send`, such as a dropped socket. The hub adds the channel and passes it to `onReport`. Never write to the console; the host decides what to log. `send` failures need no report: the core reports them as `send_retry` and `send_failed`.
 - `fetchFile` downloads a file a message listed in `files`, with the platform's credentials. Check the URL's host before sending a token.
 - `send` may return `{ addressData?, alias? }`. `addressData` replaces the stored data of the address it sent to. `alias` binds another address of the same channel to the same conversation. Use both when the first post creates the real thread, as Slack does.
 

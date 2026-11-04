@@ -21,6 +21,7 @@ const channels = createChannels({
     slack: { adapter: slack, conversation: (message) => ({ agent: { model, instructions } }) },
     github: { adapter: github },
   },
+  onReport: (report) => log(report),
 });
 registry.install(channels.extension);
 registry.install(channels.tools);
@@ -35,6 +36,10 @@ await hub.start(signal);
   it returns `undefined`. It gets the message and `{ channel }`, so one factory can serve several channels, and can pick
   the agent from the message's `event`, such as `issues.opened`. Without it, only
   bound addresses reach a conversation.
+- **Reports.** `onReport` receives one `ChannelReport` per event: `admitted` (with `duplicate` for a repeated
+  `requestId`), `ignored`, `send_retry`, `send_failed`, and the adapters' `skipped` and `adapter_error`, each with its
+  `channel`. Send reports can repeat after a restart; use them for logs, not accounting. A throwing `onReport` is
+  ignored. The core writes nothing to the console.
 - **Binding.** Application code attaches an address to any conversation: `hub.bind(target, conversationId)` from the
   host, or `channels.bind(tx, target, api.conversationId)` inside a tool's commit, for example after opening a pull
   request.
@@ -47,7 +52,8 @@ adapter (socket event, HTTP request, file)   verify, parse
     commit: unknown address → conversation(message, { channel }) → create conversation, bind the address
     files → adapter.fetchFile(url) → save in the conversation's env → paths after the text, images inline
     commit: conversation.submit(tx, input as a channel.message entry, or a channel.note write when run is false)
-  → { submissionId, conversationId }, or undefined when no conversation takes the address
+  → onReport admitted → { submissionId, conversationId }
+  → onReport ignored → undefined when no conversation takes the address
 
 conversation runs (queue or steer, model, tools)
   progress watcher (adapters with progress)
@@ -56,7 +62,8 @@ conversation runs (queue or steer, model, tools)
     one channels.send task per channel.message entry in the run
       adapter.send(reply, { replyContext, addressData, idempotencyKey: reply:<entry> })
         returns { addressData?, alias? } → stored on the address, alias bound to the same conversation
-      failure → sleep with backoff → retry → terminal failed after the last attempt
+      failure → onReport send_retry → sleep with backoff → retry
+      last attempt fails → onReport send_failed → terminal failed
 ```
 
 - **Busy policy.** `whenBusy: "queue"` (default) gives a message its own run after the current one. `"steer"` joins
@@ -74,7 +81,7 @@ conversation runs (queue or steer, model, tools)
 
 ```ts
 type ChannelAdapter = {
-  start?(ctx: { deliver; cancel; signal }): void | Promise<void>;
+  start?(ctx: { deliver; cancel; report; signal }): void | Promise<void>;
   fetch?(request): Promise<Response>;
   send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
   progress?(target, update): void | Promise<void>;
@@ -82,7 +89,8 @@ type ChannelAdapter = {
 };
 ```
 
-`start` opens the adapter's inbound transport and keeps `deliver` and `cancel`. HTTP adapters implement `fetch`, which
+`start` opens the adapter's inbound transport and keeps `deliver`, `cancel`, and `report`. `report` sends `skipped`
+and `adapter_error` reports to the host's `onReport`; adapters use it instead of the console. HTTP adapters implement `fetch`, which
 the host mounts at a URL of its choosing; socket and polling adapters leave it out. `progress` drives typing indicators, session status, or a timeline of tool calls. `fetchFile`
 downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
 the host's `env` builder: `channels.hub(harness, { env })`. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and

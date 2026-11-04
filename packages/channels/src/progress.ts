@@ -6,6 +6,7 @@ import {
   LiveDoc,
   type TaskGraph,
 } from "@earendil-works/pi-durable";
+import type { Reporter } from "./report";
 import { runTracker } from "./run-tracker";
 import type { AdapterLookup } from "./send";
 
@@ -22,11 +23,12 @@ async function follow(
   harness: Harness,
   id: ConversationId,
   adapterFor: AdapterLookup,
+  report: Reporter,
 ): Promise<Follower | undefined> {
   const conversation = await harness.conversation(id, context);
   const watch = await harness.watchDoc(LiveDoc, id, context);
   if (conversation === undefined || watch === undefined) return undefined;
-  const track = runTracker(conversation, adapterFor);
+  const track = runTracker(conversation, adapterFor, report);
   let closing = false;
   let idle = false;
   const stopWhenIdle = () => closing && idle && void watch.stop();
@@ -61,13 +63,14 @@ function generating(graph: TaskGraph): Set<ConversationId> {
 export async function watchProgress(
   harness: Harness,
   adapterFor: AdapterLookup,
+  report: Reporter,
   signal: AbortSignal,
 ): Promise<void> {
   const followers = new Map<ConversationId, Promise<Follower | undefined>>();
   const graph = await harness.watchTaskGraph(context);
 
   function start(id: ConversationId): void {
-    const follower = follow(harness, id, adapterFor);
+    const follower = follow(harness, id, adapterFor, report);
     followers.set(id, follower);
     void follower.then(async (found) => {
       if (found === undefined) return followers.delete(id);

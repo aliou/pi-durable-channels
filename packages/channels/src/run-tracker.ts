@@ -7,13 +7,18 @@ import type {
 } from "@earendil-works/pi-durable";
 import { ChannelMessage } from "./doc";
 import { replyKey, runEntries } from "./hook";
+import type { Reporter } from "./report";
 import type { AdapterLookup } from "./send";
 import { stepsOf } from "./steps";
 import type { ChannelAdapter, ReplyProgress, ReplyTarget } from "./types";
 
 const context = BACKGROUND_CONTEXT;
 
-type Recipient = { adapter: ChannelAdapter; target: ReplyTarget };
+type Recipient = {
+  channel: string;
+  adapter: ChannelAdapter;
+  target: ReplyTarget;
+};
 
 type Run = {
   first: EntryId;
@@ -26,11 +31,19 @@ type Run = {
 async function notify(
   recipients: readonly Recipient[],
   update: ReplyProgress,
+  report: Reporter,
 ): Promise<void> {
-  for (const { adapter, target } of recipients) {
+  for (const { channel, adapter, target } of recipients) {
     await Promise.resolve()
       .then(() => adapter.progress?.(target, update))
-      .catch(() => undefined);
+      .catch((error: unknown) =>
+        report({
+          kind: "adapter_error",
+          channel,
+          address: target.address,
+          error,
+        }),
+      );
   }
 }
 
@@ -50,14 +63,16 @@ async function recipientsOf(
   return entries.filter(ChannelMessage.is).flatMap(({ id, data }) => {
     const adapter = adapterFor(data.channel);
     if (adapter?.progress === undefined) return [];
-    const { channel: _channel, author: _author, ...target } = data;
-    return [{ adapter, target: { ...target, idempotencyKey: replyKey(id) } }];
+    const { channel, author: _author, ...target } = data;
+    const idempotencyKey = replyKey(id);
+    return [{ channel, adapter, target: { ...target, idempotencyKey } }];
   });
 }
 
 export function runTracker(
   conversation: Conversation,
   adapterFor: AdapterLookup,
+  report: Reporter,
 ) {
   let run: Run | undefined;
 
@@ -76,7 +91,7 @@ export function runTracker(
     const added = current.recipients.filter(
       ({ target }) => !known.has(target.idempotencyKey),
     );
-    await notify(added, { type: "working" });
+    await notify(added, { type: "working" }, report);
   }
 
   async function freshEntries(current: Run) {
@@ -91,7 +106,7 @@ export function runTracker(
   async function steps(current: Run): Promise<void> {
     const entries = await freshEntries(current);
     for (const step of stepsOf(entries, current.titles))
-      await notify(current.recipients, { type: "step", step });
+      await notify(current.recipients, { type: "step", step }, report);
   }
 
   async function end(live: LiveState): Promise<void> {
@@ -101,7 +116,7 @@ export function runTracker(
     run = undefined;
     await steps(ended);
     const { recipients } = ended;
-    if (stopped !== undefined) await notify(recipients, stopped);
+    if (stopped !== undefined) await notify(recipients, stopped, report);
   }
 
   return async (live: LiveState): Promise<void> => {

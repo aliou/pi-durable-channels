@@ -10,6 +10,7 @@ import {
 import { type BindTarget, bindAddress, EXTENSION } from "./bind";
 import { replyHook } from "./hook";
 import { type ChannelsHub, createHub, type HubOptions } from "./hub";
+import { reporter } from "./report";
 import { defineSendTask } from "./send";
 import { defineChannelTools } from "./tools";
 import type { ChannelRegistration, ChannelsOptions } from "./types";
@@ -37,7 +38,12 @@ export function createChannels(options: ChannelsOptions): Channels {
     Object.hasOwn(options.channels, channel)
       ? options.channels[channel].adapter
       : undefined;
-  const Send = defineSendTask(adapterFor, options.retry ?? DEFAULT_RETRY);
+  const report = reporter(options.onReport);
+  const Send = defineSendTask(
+    adapterFor,
+    options.retry ?? DEFAULT_RETRY,
+    report,
+  );
 
   return {
     extension: defineExtension({
@@ -55,6 +61,7 @@ export function createChannels(options: ChannelsOptions): Channels {
         options,
         registration,
         adapterFor,
+        report,
         env: hubOptions?.env,
       }),
   };

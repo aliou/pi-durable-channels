@@ -156,6 +156,14 @@ describe("delivery", () => {
     expect(inFlight).toEqual(first);
     expect(after).toEqual(first);
     expect(test.adapter.sent).toHaveLength(1);
+    const admitted = { kind: "admitted", channel: "web", address: "thread-1" };
+    expect(
+      test.channelReports.filter(({ kind }) => kind === "admitted"),
+    ).toEqual([
+      { ...admitted, ...first, duplicate: false },
+      { ...admitted, ...first, duplicate: true },
+      { ...admitted, ...first, duplicate: true },
+    ]);
     await harness.close(context);
   });
 
@@ -305,13 +313,24 @@ describe("send failures and recovery", () => {
     expect(
       new Set(test.adapter.sent.map(({ ctx }) => ctx.idempotencyKey)).size,
     ).toBe(1);
+    const failure = {
+      channel: "web",
+      address: "thread-1",
+      error: expect.any(Error),
+    };
+    expect(
+      test.channelReports.filter(({ kind }) => kind.startsWith("send_")),
+    ).toEqual([
+      { kind: "send_retry", ...failure, attempt: 1 },
+      { kind: "send_retry", ...failure, attempt: 2 },
+    ]);
     await expect(hub.status(receipt.submissionId)).resolves.toEqual({
       state: "done",
     });
     await harness.close(context);
   });
 
-  it("fails the delivery after the last attempt and reports the error", async () => {
+  it("fails the delivery after the last attempt and reports it once, as send_failed", async () => {
     const test = setup();
     test.adapter.failures = 10;
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
@@ -322,7 +341,42 @@ describe("send failures and recovery", () => {
       state: "failed",
       error: "platform unavailable",
     });
-    expect(test.reports.map((report) => report.kind)).toContain("task_error");
+    expect(
+      test.channelReports.flatMap((report) =>
+        report.kind.startsWith("send_") ? [report.kind] : [],
+      ),
+    ).toEqual(["send_retry", "send_retry", "send_failed"]);
+    expect(test.channelReports.at(-1)).toEqual({
+      kind: "send_failed",
+      channel: "web",
+      address: "thread-1",
+      error: new Error("platform unavailable"),
+    });
+    expect(test.reports.map((report) => report.kind)).not.toContain(
+      "task_error",
+    );
+    await harness.close(context);
+  });
+
+  it("delivers and sends when onReport throws", async () => {
+    const test = setup({
+      onReport: () => {
+        throw new Error("sink down");
+      },
+    });
+    test.adapter.failures = 1;
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const receipt = await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    expect(test.adapter.sent).toHaveLength(2);
+    await expect(hub.status(receipt.submissionId)).resolves.toEqual({
+      state: "done",
+    });
+    expect(test.channelReports.map(({ kind }) => kind)).toEqual([
+      "admitted",
+      "send_retry",
+    ]);
+    expect(test.reports).toEqual([]);
     await harness.close(context);
   });
 
@@ -685,6 +739,12 @@ describe("binding", () => {
     await harness.waitForIdle(context);
     expect(accepted).toBeDefined();
     expect(quiet.sent).toEqual([]);
+    expect(
+      test.channelReports.filter(({ kind }) => kind === "ignored"),
+    ).toEqual([
+      { kind: "ignored", channel: "quiet", address: "thread-1" },
+      { kind: "ignored", channel: "picky", address: "thread-1" },
+    ]);
     expect(picky.sent.map(({ message }) => message.address)).toEqual([
       "case:1",
     ]);
@@ -765,6 +825,24 @@ describe("adapters", () => {
     expect(receipt?.conversationId).toBeDefined();
     expect(adapter.sent.map(({ message }) => message.parts[0]?.text)).toEqual([
       "echo hello",
+    ]);
+    await harness.close(context);
+  });
+
+  it("passes an adapter's reports to onReport with its channel", async () => {
+    const adapter = testAdapter();
+    adapter.start = ({ report }) => {
+      report({ kind: "skipped", detail: "bot message" });
+      report({ kind: "adapter_error", error: "socket closed" });
+    };
+    const test = setup({
+      channels: { chat: { adapter, conversation: createWeb } },
+    });
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await hub.start();
+    expect(test.channelReports).toEqual([
+      { kind: "skipped", channel: "chat", detail: "bot message" },
+      { kind: "adapter_error", channel: "chat", error: "socket closed" },
     ]);
     await harness.close(context);
   });
@@ -1183,6 +1261,30 @@ describe("progress", () => {
     ]);
     expect(seen.at(-1)).toEqual({ type: "stopped", reason: "aborted" });
     expect(test.adapter.sent).toEqual([]);
+    await harness.close(context);
+  });
+
+  it("reports a throwing progress as an adapter error with its channel and address", async () => {
+    const test = setup();
+    test.adapter.progress = () => {
+      throw new Error("render failed");
+    };
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    await eventually(() =>
+      test.channelReports.some(({ kind }) => kind === "adapter_error"),
+    );
+    expect(
+      test.channelReports.find(({ kind }) => kind === "adapter_error"),
+    ).toEqual({
+      kind: "adapter_error",
+      channel: "web",
+      address: "thread-1",
+      error: new Error("render failed"),
+    });
+    expect(test.adapter.sent).toHaveLength(1);
     await harness.close(context);
   });
 
