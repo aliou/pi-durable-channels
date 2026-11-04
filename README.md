@@ -32,7 +32,8 @@ await hub.start(signal);
 - **Channels are names.** Each conversation's persona comes from its own config, so several personas share one
   harness without extra setup.
 - **`conversation` is optional.** With it, a message to an unknown address creates a conversation, or is ignored when
-  it returns `undefined`. It can pick the agent from the message's `event`, such as `issues.opened`. Without it, only
+  it returns `undefined`. It gets the message and `{ channel }`, so one factory can serve several channels, and can pick
+  the agent from the message's `event`, such as `issues.opened`. Without it, only
   bound addresses reach a conversation.
 - **Binding.** Application code attaches an address to any conversation: `hub.bind(target, conversationId)` from the
   host, or `channels.bind(tx, target, api.conversationId)` inside a tool's commit, for example after opening a pull
@@ -43,7 +44,7 @@ await hub.start(signal);
 ```text
 adapter (socket event, HTTP request, file)   verify, parse
   deliver(message, { whenBusy?, run? })      serialized per address
-    commit: unknown address → conversation(message) → create conversation, bind the address
+    commit: unknown address → conversation(message, { channel }) → create conversation, bind the address
     files → adapter.fetchFile(url) → save in the conversation's env → paths after the text, images inline
     commit: conversation.submit(tx, input as a channel.message entry, or a channel.note write when run is false)
   → { submissionId, conversationId }, or undefined when no conversation takes the address

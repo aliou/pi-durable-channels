@@ -43,7 +43,7 @@ await hub.start(signal);
 
 `env` is the same environment builder the host passes to `Harness.open`. Without it, attachments are named to the model but not saved.
 
-`conversation` is optional. Without it, only addresses bound by application code reach a conversation. Bind from a tool in its own commit:
+`conversation` is optional and receives the message and `{ channel }`, so one factory can serve every channel. Without it, only addresses bound by application code reach a conversation. Bind from a tool in its own commit:
 
 ```ts
 await api.commit((tx) => channels.bind(tx, { channel: "github", address: "acme/app#42" }, api.conversationId), context);

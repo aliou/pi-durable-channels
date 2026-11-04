@@ -82,7 +82,7 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
       const state = await tx.doc(ChannelsDoc);
       const existing = findBinding(state, key);
       if (existing !== undefined) return existing.conversationId;
-      const created = factory?.(message);
+      const created = factory?.(message, { channel: key.channel });
       if (created === undefined) return undefined;
       const record = await tx.createConversation({
         ownership: { kind: "ownerless" },

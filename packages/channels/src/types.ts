@@ -94,7 +94,10 @@ export type ConversationSetup = { agent?: AgentChange };
 
 export type ChannelRegistration = {
   adapter: ChannelAdapter;
-  conversation?(message: InboundMessage): ConversationSetup | undefined;
+  conversation?(
+    message: InboundMessage,
+    source: { channel: string },
+  ): ConversationSetup | undefined;
 };
 
 export type SendRetry = { attempts: number; baseDelayMs: number };

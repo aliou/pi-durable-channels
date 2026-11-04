@@ -176,6 +176,34 @@ describe("delivery", () => {
     await harness.close(context);
   });
 
+  it("tells a shared conversation factory which channel a message came from", async () => {
+    const seen: string[] = [];
+    const factory = (_message: unknown, { channel }: { channel: string }) => {
+      seen.push(channel);
+      return { agent: { model: MODEL, instructions: channel } };
+    };
+    const test = setup({
+      channels: {
+        web: { adapter: testAdapter(), conversation: factory },
+        chat: { adapter: testAdapter(), conversation: factory },
+      },
+    });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const web = await deliver(inbound("hi", "evt-1"), undefined, "web");
+    const chat = await deliver(inbound("hi", "evt-2"), undefined, "chat");
+    await harness.waitForIdle(context);
+    expect(seen).toEqual(["web", "chat"]);
+    const instructions = await Promise.all(
+      [web, chat].map(async ({ conversationId }) => {
+        const conversation = await conversationOf(harness, conversationId);
+        const agent = await conversation.agent(context);
+        return agent.instructions;
+      }),
+    );
+    expect(instructions).toEqual(["web", "chat"]);
+    await harness.close(context);
+  });
+
   it("binds one conversation per address across hubs of one harness", async () => {
     const test = setup();
     const { harness, deliver } = await test.open(new MemoryStorage());
