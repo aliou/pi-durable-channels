@@ -817,15 +817,16 @@ describe("adapters", () => {
       channels: { web: { adapter, conversation: createWeb } },
     });
     const { harness, hub } = await test.open(new MemoryStorage());
-    const controller = new AbortController();
-    await hub.start(controller.signal);
-    expect(started.signal).toBe(controller.signal);
+    await hub.start();
     const receipt = await started.deliver?.(inbound("hello", "evt-1"));
     await harness.waitForIdle(context);
     expect(receipt?.conversationId).toBeDefined();
     expect(adapter.sent.map(({ message }) => message.parts[0]?.text)).toEqual([
       "echo hello",
     ]);
+    expect(started.signal?.aborted).toBe(false);
+    await hub.stop();
+    expect(started.signal?.aborted).toBe(true);
     await harness.close(context);
   });
 
@@ -1049,6 +1050,160 @@ describe("lifecycle", () => {
     const { harness, hub } = await test.open(new MemoryStorage());
     await hub.end(key);
     await hub.cancel(key);
+    await harness.close(context);
+  });
+});
+
+describe("stop", () => {
+  function stoppable(test: ReturnType<typeof setup>) {
+    const log: string[] = [];
+    const started: Partial<AdapterStart> = {};
+    test.adapter.start = (ctx) => {
+      Object.assign(started, ctx);
+    };
+    test.adapter.stop = async () => {
+      log.push("adapter stopped");
+    };
+    return { log, started };
+  }
+
+  it("stores a delivery in flight before closing adapters, and resolves after it", async () => {
+    const test = setup();
+    const { log, started } = stoppable(test);
+    const download = gate();
+    test.adapter.fetchFile = async () => {
+      log.push("downloading");
+      await download.promise;
+      return new TextEncoder().encode("notes");
+    };
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await hub.start();
+    const file = { name: "a.txt", mimeType: "text/plain", url: "u" };
+    const delivery = started.deliver?.({
+      ...inbound("hi", "evt-1"),
+      files: [file],
+    });
+    void delivery?.then(() =>
+      log.push(`stored, open=${!started.signal?.aborted}`),
+    );
+    await eventually(() => log.includes("downloading"));
+    const stopping = hub.stop().then(() => log.push("hub stopped"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(log).toEqual(["downloading"]);
+    download.open();
+    await stopping;
+    expect(log).toEqual([
+      "downloading",
+      "stored, open=true",
+      "adapter stopped",
+      "hub stopped",
+    ]);
+    const receipt = await accepted(delivery ?? Promise.resolve(undefined));
+    await expect(hub.status(receipt.submissionId)).resolves.toBeDefined();
+    await harness.close(context);
+  });
+
+  it("rejects every change after stop and keeps the reads", async () => {
+    const test = setup();
+    const { started } = stoppable(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    const receipt = await deliver(inbound("hi", "evt-1"));
+    await harness.waitForIdle(context);
+    await hub.stop();
+    const key = { channel: "web", address: "thread-1" };
+    const changes = [
+      hub.deliver("web", inbound("again", "evt-2")),
+      started.deliver?.(inbound("again", "evt-3")),
+      hub.bind({ channel: "web", address: "other" }, receipt.conversationId),
+      hub.cancel(key),
+      hub.clear(key),
+      hub.compact(key),
+      hub.end(key),
+      started.cancel?.("thread-1"),
+    ];
+    for (const change of changes)
+      await expect(change).rejects.toThrow("Channels hub is stopped");
+    await expect(hub.conversationOf(key)).resolves.toBe(receipt.conversationId);
+    await expect(hub.addresses(receipt.conversationId)).resolves.toEqual([key]);
+    await expect(hub.status(receipt.submissionId)).resolves.toEqual({
+      state: "done",
+    });
+    await harness.close(context);
+  });
+
+  it("starts once: a second start or a start after stop rejects", async () => {
+    const test = setup();
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await hub.start();
+    await expect(hub.start()).rejects.toThrow("can only start once");
+    await hub.stop();
+    const unstarted = test.channels.hub(harness);
+    await unstarted.stop();
+    await expect(unstarted.start()).rejects.toThrow("can only start once");
+    await harness.close(context);
+  });
+
+  it("waits for a start in progress before stopping, and stops what it started", async () => {
+    const test = setup();
+    const { log, started } = stoppable(test);
+    const ready = gate();
+    test.adapter.start = async (ctx) => {
+      Object.assign(started, ctx);
+      await ready.promise;
+      log.push(`started, open=${!ctx.signal.aborted}`);
+    };
+    test.adapter.progress = (_target, update) => {
+      log.push(update.type);
+    };
+    const { harness, hub } = await test.open(new MemoryStorage());
+    const starting = hub.start();
+    await eventually(() => started.signal !== undefined);
+    const stopping = hub.stop();
+    ready.open();
+    await starting;
+    await stopping;
+    expect(log).toEqual(["started, open=true", "adapter stopped"]);
+    const other = test.channels.hub(harness);
+    await other.deliver("web", inbound("hello", "evt-1"));
+    await harness.waitForIdle(context);
+    expect(test.adapter.sent).toHaveLength(1);
+    expect(log).toEqual(["started, open=true", "adapter stopped"]);
+    await harness.close(context);
+  });
+
+  it("rejects start when an adapter fails to start", async () => {
+    const test = setup();
+    test.adapter.start = async () => {
+      throw new Error("bad token");
+    };
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await expect(hub.start()).rejects.toThrow("bad token");
+    await hub.stop();
+    await harness.close(context);
+  });
+
+  it("stops adapters after the progress calls in flight finish", async () => {
+    const test = setup();
+    const { log } = stoppable(test);
+    const rendering = gate();
+    test.adapter.progress = async (_target, update) => {
+      if (update.type !== "working") return;
+      log.push("rendering");
+      await rendering.promise;
+      log.push("rendered");
+    };
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("hi", "evt-1"));
+    await eventually(() => log.includes("rendering"));
+    const stopping = hub.stop();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(log).toEqual(["rendering"]);
+    rendering.open();
+    await stopping;
+    expect(log).toEqual(["rendering", "rendered", "adapter stopped"]);
+    await harness.waitForIdle(context);
     await harness.close(context);
   });
 });

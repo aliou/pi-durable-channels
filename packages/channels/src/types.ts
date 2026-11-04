@@ -104,6 +104,7 @@ export type AdapterStart = {
 
 export type ChannelAdapter = {
   start?(ctx: AdapterStart): void | Promise<void>;
+  stop?(): Promise<void>;
   fetch?(request: Request): Promise<Response>;
   send(
     message: OutboundMessage,

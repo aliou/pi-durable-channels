@@ -4,6 +4,7 @@ import {
   GenerationTask,
   type Harness,
   LiveDoc,
+  type LiveState,
   type TaskGraph,
 } from "@earendil-works/pi-durable";
 import type { Reporter } from "./report";
@@ -31,16 +32,20 @@ async function follow(
   const track = runTracker(conversation, adapterFor, report);
   let closing = false;
   let idle = false;
+  let busy = Promise.resolve();
   const stopWhenIdle = () => closing && idle && void watch.stop();
-  watch.start(async (call) => {
-    if (call.kind !== "value") return;
-    const live = call.value;
+  async function observe(live: LiveState): Promise<void> {
     await track(live);
     idle = live.run === undefined;
     stopWhenIdle();
+  }
+  watch.start(async (call) => {
+    if (call.kind !== "value") return;
+    busy = observe(call.value);
+    await busy;
   });
   return {
-    closed: watch.closed.then(() => undefined),
+    closed: watch.closed.then(() => busy),
     stop: () => void watch.stop(),
     close: () => {
       closing = true;
@@ -60,12 +65,14 @@ function generating(graph: TaskGraph): Set<ConversationId> {
   );
 }
 
+export type ProgressWatch = { stop(): Promise<void> };
+
 export async function watchProgress(
   harness: Harness,
   adapterFor: AdapterLookup,
   report: Reporter,
-  signal: AbortSignal,
-): Promise<void> {
+): Promise<ProgressWatch> {
+  let stopped = false;
   const followers = new Map<ConversationId, Promise<Follower | undefined>>();
   const graph = await harness.watchTaskGraph(context);
 
@@ -74,10 +81,9 @@ export async function watchProgress(
     followers.set(id, follower);
     void follower.then(async (found) => {
       if (found === undefined) return followers.delete(id);
-      if (signal.aborted) found.stop();
       await found.closed;
       followers.delete(id);
-      if (!signal.aborted && generating(graph.value).has(id)) start(id);
+      if (!stopped && generating(graph.value).has(id)) start(id);
     });
   }
 
@@ -92,16 +98,20 @@ export async function watchProgress(
   }
 
   graph.start(async (call) => {
-    if (call.kind === "value" && !signal.aborted)
-      update(generating(call.value));
+    if (call.kind === "value" && !stopped) update(generating(call.value));
   });
-  signal.addEventListener(
-    "abort",
-    () => {
-      void graph.stop();
-      for (const follower of followers.values())
-        void follower.then((found) => found?.stop());
+
+  async function stopFollower(follower: Promise<Follower | undefined>) {
+    const found = await follower;
+    found?.stop();
+    await found?.closed;
+  }
+
+  return {
+    stop: async () => {
+      stopped = true;
+      await graph.stop();
+      await Promise.all([...followers.values()].map(stopFollower));
     },
-    { once: true },
-  );
+  };
 }

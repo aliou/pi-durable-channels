@@ -16,7 +16,7 @@ const channels = createChannels({
     },
   },
 });
-await channels.hub(harness).start(signal);
+await channels.hub(harness).start();
 // mount github.fetch at the repository webhook's URL
 ```
 

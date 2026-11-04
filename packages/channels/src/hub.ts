@@ -16,7 +16,7 @@ import {
   findBinding,
   setBinding,
 } from "./doc";
-import { watchProgress } from "./progress";
+import { type ProgressWatch, watchProgress } from "./progress";
 import type { Reporter } from "./report";
 import type { AdapterLookup } from "./send";
 import { deliveryStatus } from "./status";
@@ -34,7 +34,8 @@ import type {
 const context = BACKGROUND_CONTEXT;
 
 export type ChannelsHub = {
-  start(signal?: AbortSignal): Promise<void>;
+  start(): Promise<void>;
+  stop(): Promise<void>;
   deliver(
     channel: string,
     message: InboundMessage,
@@ -65,8 +66,17 @@ const cancel = (conversation: Conversation) =>
 
 export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
   const tails = new Map<string, Promise<unknown>>();
+  const controller = new AbortController();
+  const adapters = Object.values(setup.options.channels).map(
+    ({ adapter }) => adapter,
+  );
+  let starting: Promise<void> | undefined;
+  let watcher: ProgressWatch | undefined;
+  let stopping: Promise<void> | undefined;
 
   function serial<T>(key: AddressKey, run: () => Promise<T>): Promise<T> {
+    if (stopping !== undefined)
+      return Promise.reject(new Error("Channels hub is stopped"));
     const id = JSON.stringify([key.channel, key.address]);
     const result = (tails.get(id) ?? Promise.resolve()).then(run);
     const tail = result.catch(() => undefined);
@@ -160,10 +170,18 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     return serial(key, () => admit(key, message, resolved));
   };
 
-  async function start(signal = new AbortController().signal): Promise<void> {
+  function start(): Promise<void> {
+    if (starting !== undefined || stopping !== undefined)
+      return Promise.reject(new Error("Channels hub can only start once"));
+    starting = startAll();
+    return starting;
+  }
+
+  async function startAll(): Promise<void> {
     const channels = Object.entries(setup.options.channels);
-    if (channels.some(([, { adapter }]) => adapter.progress !== undefined))
-      await watchProgress(harness, setup.adapterFor, setup.report, signal);
+    if (adapters.some((adapter) => adapter.progress !== undefined))
+      watcher = await watchProgress(harness, setup.adapterFor, setup.report);
+    const { signal } = controller;
     await Promise.all(
       channels.map(([channel, { adapter }]) =>
         adapter.start?.({
@@ -174,6 +192,20 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
         }),
       ),
     );
+  }
+
+  async function drain(): Promise<void> {
+    await starting?.catch(() => undefined);
+    await Promise.all(tails.values());
+    await watcher?.stop();
+    controller.abort();
+    if (starting === undefined) return;
+    await Promise.all(adapters.map((adapter) => adapter.stop?.()));
+  }
+
+  function stop(): Promise<void> {
+    stopping ??= drain();
+    return stopping;
   }
 
   async function bind(target: BindTarget, conversationId: ConversationId) {
@@ -213,6 +245,7 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
 
   return {
     start,
+    stop,
     deliver,
     bind,
     addresses,

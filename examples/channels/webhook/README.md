@@ -11,7 +11,7 @@ const web = webhook({
   allowedOrigins: ["https://hooks.example.com", "https://*.preview.example.com"],
 });
 const channels = createChannels({ channels: { web: { adapter: web, conversation } } });
-await channels.hub(harness).start(signal);
+await channels.hub(harness).start();
 // mount web.fetch on any path of the host's server
 ```
 

@@ -14,7 +14,7 @@ const slack = slackChannel({
 });
 // or transport: httpEvents(signingSecret), and mount slack.fetch at the Event Subscriptions URL
 const channels = createChannels({ channels: { slack: { adapter: slack, conversation } } });
-await channels.hub(harness, { env }).start(signal);
+await channels.hub(harness, { env }).start();
 ```
 
 Which messages start a run:

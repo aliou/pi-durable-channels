@@ -27,7 +27,14 @@ registry.install(channels.extension);
 registry.install(channels.tools);
 const harness = await Harness.open(storage, { models, registry }, context);
 const hub = channels.hub(harness);
-await hub.start(signal);
+await hub.start();
+```
+
+On shutdown, stop the hub before closing the Harness:
+
+```ts
+await hub.stop();
+await harness.close(context);
 ```
 
 - **Channels are names.** Each conversation's persona comes from its own config, so several personas share one
@@ -82,6 +89,7 @@ conversation runs (queue or steer, model, tools)
 ```ts
 type ChannelAdapter = {
   start?(ctx: { deliver; cancel; report; signal }): void | Promise<void>;
+  stop?(): Promise<void>;
   fetch?(request): Promise<Response>;
   send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
   progress?(target, update): void | Promise<void>;
@@ -89,7 +97,8 @@ type ChannelAdapter = {
 };
 ```
 
-`start` opens the adapter's inbound transport and keeps `deliver`, `cancel`, and `report`. `report` sends `skipped`
+`start` opens the adapter's inbound transport and resolves once it is ready; a rejection fails `hub.start()`. `stop`
+resolves once the transport is closed. `signal` aborts when the hub stops, to cancel calls in flight. `start` keeps `deliver`, `cancel`, and `report`. `report` sends `skipped`
 and `adapter_error` reports to the host's `onReport`; adapters use it instead of the console. HTTP adapters implement `fetch`, which
 the host mounts at a URL of its choosing; socket and polling adapters leave it out. `progress` drives typing indicators, session status, or a timeline of tool calls. `fetchFile`
 downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
@@ -100,7 +109,8 @@ testing.
 
 | Method | Effect |
 | --- | --- |
-| `start(signal?)` | Start every adapter with a `deliver` and `cancel` bound to its channel, and watch runs for `progress` |
+| `start()` | Start every adapter with a `deliver`, `cancel`, and `report` bound to its channel, and watch runs for `progress`; resolves once every adapter is ready. A hub starts once |
+| `stop()` | Reject further changes, wait for deliveries in flight, stop the progress watcher, then abort the adapters' signal and await their `stop` |
 | `deliver(channel, message, options?)` | Admit a message; resolves once it is stored |
 | `bind(target, conversationId)` | Attach an address to a conversation |
 | `addresses(conversationId)` | Every address bound to the conversation, aliases included |

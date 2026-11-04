@@ -54,11 +54,11 @@ export async function run(options: RunOptions): Promise<void> {
   );
   harness.resume();
   const hub = options.channels.hub(harness, { env: options.env });
-  const stop = new AbortController();
-  await hub.start(stop.signal);
+  await hub.start();
   if (options.routes !== undefined) serveRoutes(options.routes, hub);
-  process.once("SIGINT", () => {
-    stop.abort();
-    void harness.close(BACKGROUND_CONTEXT).then(() => process.exit(0));
+  process.once("SIGINT", async () => {
+    await hub.stop();
+    await harness.close(BACKGROUND_CONTEXT);
+    process.exit(0);
   });
 }
