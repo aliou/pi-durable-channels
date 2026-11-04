@@ -1,0 +1,152 @@
+name: Publish
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Prepare release or stage packages
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          scope: "@aliou"
+          cache: "pnpm"
+
+      - name: Upgrade npm for stage publish support
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Get release info
+        id: release-info
+        run: |
+          pnpm changeset status --output=release.json
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const release = JSON.parse(fs.readFileSync('release.json', 'utf8'));
+          const releases = release.releases.filter(r => r.type !== 'none');
+          const packages = fs.readdirSync('packages').flatMap(dir => {
+            const manifest = path.join('packages', dir, 'package.json');
+            return fs.existsSync(manifest) ? [JSON.parse(fs.readFileSync(manifest, 'utf8'))] : [];
+          }).filter(pkg => !pkg.private);
+          const summary = releases.length > 0
+            ? releases.map(r => r.name + '@' + r.newVersion).join(', ')
+            : packages.map(pkg => pkg.name + '@' + pkg.version).join(', ');
+          const title = releases.length === 1
+            ? 'Updating ' + releases[0].name + ' to version ' + releases[0].newVersion
+            : 'Updating ' + summary;
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'title=' + title + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'commit=' + summary + '\n');
+          NODE
+          rm -f release.json
+
+      - name: Create release PR
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset version
+          title: ${{ steps.release-info.outputs.title }}
+          commit: ${{ steps.release-info.outputs.commit }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for unpublished packages
+        id: check-publish
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: |
+          node <<'NODE'
+          const { spawnSync } = require('node:child_process');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const unpublished = [];
+          for (const dir of fs.readdirSync('packages')) {
+            const manifest = path.join('packages', dir, 'package.json');
+            if (!fs.existsSync(manifest)) continue;
+            const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+            if (pkg.private) continue;
+            const result = spawnSync('npm', ['view', pkg.name + '@' + pkg.version, 'version'], { encoding: 'utf8' });
+            if (result.status !== 0) {
+              unpublished.push({ name: pkg.name, version: pkg.version, dir: path.join('packages', dir) });
+            }
+          }
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'packages=' + JSON.stringify(unpublished) + '\n');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, 'needs_staging=' + (unpublished.length > 0) + '\n');
+          NODE
+
+      - name: Build packages
+        if: steps.check-publish.outputs.needs_staging == 'true'
+        run: pnpm build
+
+      - name: Stage packages
+        if: steps.check-publish.outputs.needs_staging == 'true'
+        env:
+          PACKAGES_JSON: ${{ steps.check-publish.outputs.packages }}
+          NPM_CONFIG_PROVENANCE: true
+        run: |
+          node <<'NODE'
+          const { execFileSync, spawnSync } = require('node:child_process');
+          const path = require('node:path');
+          const packages = JSON.parse(process.env.PACKAGES_JSON);
+          for (const [index, pkg] of packages.entries()) {
+            const tarball = path.join(process.env.RUNNER_TEMP, 'package-' + index + '.tgz');
+            execFileSync('pnpm', ['pack', '--out', tarball], { cwd: pkg.dir, stdio: 'inherit' });
+            const result = spawnSync('npm', ['stage', 'publish', tarball], { encoding: 'utf8' });
+            process.stdout.write(result.stdout);
+            process.stderr.write(result.stderr);
+            if (result.status === 0) continue;
+            const alreadyStaged = result.stderr.includes('npm error code E409') && result.stderr.includes('Cannot stage previously published version');
+            if (!alreadyStaged) process.exit(result.status ?? 1);
+            console.log(pkg.name + '@' + pkg.version + ' is already staged');
+          }
+          NODE
+
+      - name: Create GitHub releases
+        if: steps.check-publish.outputs.needs_staging == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PACKAGES_JSON: ${{ steps.check-publish.outputs.packages }}
+        run: |
+          node -e "JSON.parse(process.env.PACKAGES_JSON).forEach(p => console.log([p.name, p.version, p.dir].join('\t')))" > "$RUNNER_TEMP/releases.tsv"
+          while IFS=$'\t' read -r NAME VERSION DIR; do
+            TAG="$NAME@$VERSION"
+            if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+              git tag "$TAG"
+              git push origin "$TAG"
+            fi
+            if ! gh release view "$TAG" >/dev/null 2>&1; then
+              awk -v v="$VERSION" '
+                $0 == "## " v { found=1; next }
+                found && /^## / { exit }
+                found { print }
+              ' "$DIR/CHANGELOG.md" > "$RUNNER_TEMP/release-notes.md"
+              gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+            fi
+          done < "$RUNNER_TEMP/releases.tsv"

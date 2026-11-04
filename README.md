@@ -1,141 +1,30 @@
 # pi-durable-channels
 
-Platform messages in, durable pi-durable conversations out. Each channel address (a thread, a channel, a DM) maps to
-one persistent conversation. Inbound messages are stored before they are acknowledged, busy conversations queue or
-steer them, and replies go out through durable tasks that survive crashes.
+Durable messaging for [pi-durable](https://github.com/earendil-works/pi/tree/main/packages/durable) hosts. Connect platform messages to persistent conversations, queue or steer messages while an agent works, and send replies through durable tasks that resume after a crash.
 
-`packages/channels` (`@aliou/pi-durable-channels`) holds the adapter contract, `createChannels`, the hub, the send
-task, and model tools. It has no transport of its own: adapters bring HTTP, sockets, or pollers. The skill
-`skills/writing-channel-adapters/SKILL.md` covers writing adapters. `examples/channels/` has Slack, GitHub, and
-webhook adapters, and `examples/use-cases/` has three agents built on them, all as private workspace packages.
+This is a pi-durable Harness extension, not a Pi coding-agent extension. Bring an adapter for your platform; the package handles bindings, deduplication, replies, retries, and conversation-scoped messaging tools.
 
-Requires `@earendil-works/pi-durable` 1.5.0.
+See [the package README](packages/channels/README.md) for installation, a complete quick start, and the adapter and hub APIs.
 
-## Usage
+## Examples
 
-```ts
-import { createChannels } from "@aliou/pi-durable-channels";
+The [examples guide](examples/README.md) covers setup and commands. All adapters and agents are private workspace packages; copy and adapt them for your host.
 
-const channels = createChannels({
-  channels: {
-    slack: { adapter: slack, conversation: (message) => ({ agent: { model, instructions } }) },
-    github: { adapter: github },
-  },
-  onReport: (report) => log(report),
-});
-registry.install(channels.extension);
-registry.install(channels.tools);
-const harness = await Harness.open(storage, { models, registry }, context);
-const hub = channels.hub(harness);
-await hub.start();
-```
+Adapters:
 
-On shutdown, stop the hub before closing the Harness:
+- [Slack](examples/channels/slack/README.md): Socket Mode or HTTP events, thread replies, status, and tool-call timelines.
+- [GitHub](examples/channels/github/README.md): repository webhooks, issue and pull request comments, and run reactions.
+- [Webhook](examples/channels/webhook/README.md): authenticated JSON messages and replies to allowlisted origins.
 
-```ts
-await hub.stop();
-await harness.close(context);
-```
+Runnable agents:
 
-- **Channels are names.** Each conversation's persona comes from its own config, so several personas share one
-  harness without extra setup.
-- **`conversation` is optional.** With it, a message to an unknown address creates a conversation, or is ignored when
-  it returns `undefined`. It gets the message and `{ channel }`, so one factory can serve several channels, and can pick
-  the agent from the message's `event`, such as `issues.opened`. Without it, only
-  bound addresses reach a conversation.
-- **Reports.** `onReport` receives one `ChannelReport` per event: `admitted` (with `duplicate` for a repeated
-  `requestId`), `ignored`, `send_retry`, `send_failed`, and the adapters' `skipped` and `adapter_error`, each with its
-  `channel`. Send reports can repeat after a restart; use them for logs, not accounting. A throwing `onReport` is
-  ignored. The core writes nothing to the console.
-- **Binding.** Application code attaches an address to any conversation: `hub.bind(target, conversationId)` from the
-  host, or `channels.bind(tx, target, api.conversationId)` inside a tool's commit, for example after opening a pull
-  request.
-
-## How a message flows
-
-```text
-adapter (socket event, HTTP request, file)   verify, parse
-  deliver(message, { whenBusy?, run? })      serialized per address
-    commit: unknown address → conversation(message, { channel }) → create conversation, bind the address
-    files → adapter.fetchFile(url) → save in the conversation's env → paths after the text, images inline
-    commit: conversation.submit(tx, input as a channel.message entry, or a channel.note write when run is false)
-  → onReport admitted → { submissionId, conversationId }
-  → onReport ignored → undefined when no conversation takes the address
-
-conversation runs (queue or steer, model, tools)
-  events watcher (adapters with events), after each commit
-    new recipient        → events(target, run_started)
-    assistant text+tools → events(target, text) when a call is not no_reply; events(target, tool_started) per call
-    tool result          → events(target, tool_finished)
-    run gone             → events(target, run_ended completed | failed | aborted)
-    events throws        → onReport adapter_error
-  afterRun hook
-    one channels.send task per channel.message entry in the run
-      adapter.send(reply, { replyContext, addressData, idempotencyKey: reply:<entry> })
-        returns { addressData?, alias? } → stored on the address, alias bound to the same conversation
-      failure → onReport send_retry → sleep with backoff → retry
-      last attempt fails → onReport send_failed → terminal failed
-```
-
-- **Busy policy.** `whenBusy: "queue"` (default) gives a message its own run after the current one. `"steer"` joins
-  the current run. Set the default on `createChannels`, override per `deliver`.
-- **Context only.** `run: false` stores a message for the next run without starting one. It never creates a
-  conversation.
-- **Bound addresses only.** `create: false` runs a message only when its address already has a conversation, such as
-  a thread message the agent may or may not need to answer.
-- **Retries.** A repeated `requestId` returns the original receipt and starts no run.
-- **At-least-once sends.** A crash after the platform accepted a send can repeat it with the same `idempotencyKey`.
-- **Address data vs reply context.** `addressData` is durable per address (kept until replaced). `replyContext` is
-  per message, used only for that message's reply.
-
-## Adapters
-
-```ts
-type ChannelAdapter = {
-  start?(ctx: { deliver; cancel; report; signal }): void | Promise<void>;
-  stop?(): Promise<void>;
-  fetch?(request): Promise<Response>;
-  send(message, ctx): Promise<{ addressData?; alias? } | undefined | void>;
-  events?(target, event): void | Promise<void>;
-  fetchFile?(url): Promise<Uint8Array>;
-};
-```
-
-`start` opens the adapter's inbound transport and resolves once it is ready; a rejection fails `hub.start()`. `stop`
-resolves once the transport is closed. `signal` aborts when the hub stops, to cancel calls in flight. `start` keeps `deliver`, `cancel`, and `report`. `report` sends `skipped`
-and `adapter_error` reports to the host's `onReport`; adapters use it instead of the console. HTTP adapters implement `fetch`, which
-the host mounts at a URL of its choosing; socket and polling adapters leave it out. `events` receives a run's activity for each address it answers: `run_started`, narration `text`, `tool_started`,
-`tool_finished`, and `run_ended` with its outcome, in commit order. Adapters use it for typing indicators, session
-status, or a timeline of tool calls. Events are best effort and can repeat after a restart; each carries an ID to
-deduplicate. `fetchFile`
-downloads attachments with the platform's credentials; the hub saves them in the conversation's environment, so pass
-the host's `env` builder: `channels.hub(harness, { env })`. Read the skill in `skills/` before writing one; it covers the security checklist, acknowledgement order, and
-testing.
-
-## Hub
-
-| Method | Effect |
-| --- | --- |
-| `start()` | Start every adapter with a `deliver`, `cancel`, and `report` bound to its channel, and watch runs for `events`; resolves once every adapter is ready. A hub starts once |
-| `stop()` | Reject further changes, wait for deliveries in flight, stop the events watcher, then abort the adapters' signal and await their `stop` |
-| `deliver(channel, message, options?)` | Admit a message; resolves once it is stored |
-| `bind(target, conversationId)` | Attach an address to a conversation |
-| `addresses(conversationId)` | Every address bound to the conversation, aliases included |
-| `conversationOf(key)` | The conversation bound to an address, or `undefined` |
-| `status(submissionId)` | `queued`, `running`, `sending`, `done`, `aborted`, `failed`, or `blocked` |
-| `cancel(key)` | Stop the run, its sends, and notifications; withdraw queued messages |
-| `clear(key)` | Cancel, then start a fresh context in the same conversation |
-| `compact(key)` | Compact the conversation |
-| `end(key)` | Cancel, then unbind every address of the conversation; the next message starts a new one |
-
-## Model tools
-
-`channels.tools` adds `send_message({ channel, address, text })`, which sends a background notification,
-`list_addresses()`, and `no_reply()`, plus a prompt section listing addresses. `send_message` and `list_addresses` only
-see the addresses bound to the calling conversation. `no_reply` ends the run without an answer: the reply goes out with
-no parts, so adapters post nothing and clear their typing or session state.
+- [Generic webhook agent](examples/use-cases/generic-webhook-agent/README.md): triage incoming alerts and page when they need attention.
+- [Software factory](examples/use-cases/software-factory/README.md): turn Slack requests into pull requests and triage GitHub issues.
+- [Stripe churn responder](examples/use-cases/stripe-churn-responder/README.md): handle churn signals in per-customer Slack threads.
 
 ## Development
+
+Requires Node 24+. Run from the repository root:
 
 ```sh
 nix develop -c pnpm install
@@ -145,4 +34,10 @@ nix develop -c pnpm test
 nix develop -c pnpm lint
 ```
 
-`typecheck` reads the core package's build output, so build first.
+Build before typechecking; examples consume the package's generated declarations. Add a changeset with `pnpm changeset` for releasable changes.
+
+Public packages under `packages/*` are discovered automatically for staging. Each package supplies its own manifest, README, license, changelog, and build/check/test scripts. Configure npm trusted publishing for each package; no per-package workflow entry is needed. GitHub release tags use `<package-name>@<version>`.
+
+## License
+
+MIT. See `LICENSE`.
