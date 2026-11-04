@@ -36,8 +36,8 @@ github.fetch(request)
   body over 5 MiB → 413; X-Hub-Signature-256 does not match → 401
   no X-GitHub-Delivery or no JSON → 400
   inboundOf({ name: X-GitHub-Event, delivery, payload }) (events.ts)
-    issues.opened                       → run, event "issues.opened"
-    issue_comment.created               → run
+    issues.opened                       → run, event "issues.opened", replyContext { reactions: the issue's }
+    issue_comment.created               → run, replyContext { reactions: the comment's }
     pull_request_review.submitted       → run, with the review's line comments fetched and listed after its body
                                           (GET /repos/<owner>/<repo>/pulls/<n>/comments, those of this review)
     pull_request_review_comment.created → skipped; every line comment belongs to a review, and GitHub may
@@ -47,6 +47,11 @@ github.fetch(request)
     requestId = github:<delivery>[:<pull request>]
   deliver(message, options) for each → 202
     unbound address and the factory returns undefined → ignored, still 202
+
+events(target, event), for messages with a reactions path
+  run_started → POST <reactions> { content: "eyes" }
+  run_ended   → POST <reactions> { content: "eyes" } again: GitHub answers with the existing reaction
+                → DELETE <reactions>/<its id>
 
 send(reply)
   POST /repos/<owner>/<repo>/issues/<number>/comments, cut at 65,000 characters
@@ -60,6 +65,10 @@ send(reply)
 - **Two kinds of auth.** `appInstallation` signs a JWT with the app's private key, finds the app's installation on the
   repository, and mints installation tokens, reused until five minutes before they expire. `personalToken` sends one
   token as is. `githubApi(auth.token)` gives host code, such as tools, the same authenticated client.
+- **Eyes while working.** The issue or comment that started a run gets an `eyes` reaction until the run ends. The
+  adapter keeps no reaction ID, so a restart cannot leave the reaction behind once the run ends. Reviews and workflow
+  runs get none: GitHub has no reactions on reviews, and a workflow run has no comment. A failed reaction call reaches
+  `onReport` as `adapter_error`.
 - **Reports, not logs.** The adapter writes nothing to the console. A delivery that maps to no message reaches the
   host's `onReport` as `skipped`.
 - **Fixed origin.** API calls go to `https://api.github.com` with no redirects and a 30 s timeout. `apiUrl` exists
@@ -81,5 +90,6 @@ send(reply)
 
 `test/events.test.ts` covers event mapping, addresses, and signatures. `test/auth.test.ts` covers app JWTs, the
 installation lookup, and token reuse. `test/github.test.ts` runs a real harness against
-a local fake GitHub API: triage of a new issue with a redelivery and an unbound pull request, and a review run once
-with its line comments even when GitHub delivers the review first. `nix develop -c pnpm --filter @examples/github-channel test`.
+a local fake GitHub API: triage of a new issue with a redelivery and an unbound pull request, a review run once
+with its line comments even when GitHub delivers the review first, skipped events reported, and the `eyes` reaction
+added when a run starts and removed when it ends. `nix develop -c pnpm --filter @examples/github-channel test`.

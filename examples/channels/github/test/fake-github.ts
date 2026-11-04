@@ -103,6 +103,7 @@ export const payloads = {
     action: "created",
     issue: { number, pull_request: {} },
     comment: {
+      id: 500 + number,
       body,
       html_url: `https://github.com/acme/app/pull/${number}#c`,
       user: user(login),

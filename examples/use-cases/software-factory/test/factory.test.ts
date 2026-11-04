@@ -206,7 +206,10 @@ describe("software factory", () => {
     ]);
     await github(webhook("issues", payloads.issueOpened(3)));
     await harness.waitForIdle(context);
-    expect(calls.filter(({ method }) => method === "POST")).toEqual([
+    const posts = calls.filter(
+      ({ method, path }) => method === "POST" && !path.endsWith("/reactions"),
+    );
+    expect(posts).toEqual([
       expect.objectContaining({
         path: "/repos/acme/app/issues/3/labels",
         body: { labels: ["cannot-reproduce"] },

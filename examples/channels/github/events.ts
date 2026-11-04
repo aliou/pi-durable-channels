@@ -49,7 +49,7 @@ const IssueComment = compile(
         { open: true },
       ),
       comment: obj(
-        { body: str(), html_url: str(), user: User },
+        { id: int(), body: str(), html_url: str(), user: User },
         { open: true },
       ),
       repository: Repository,
@@ -122,12 +122,16 @@ const issues: Handler = (payload, { requestId, self }) => {
     issue.html_url,
     issue.body,
   );
+  const repository = payload.repository.full_name;
   const message = {
-    address: issueAddress(payload.repository.full_name, issue.number),
+    address: issueAddress(repository, issue.number),
     text,
     requestId,
     author: issue.user.login,
     event: "issues.opened",
+    replyContext: {
+      reactions: `/repos/${repository}/issues/${issue.number}/reactions`,
+    },
   };
   return [{ message, options: {} }];
 };
@@ -137,8 +141,9 @@ const issueComment: Handler = (payload, { requestId, self }) => {
   const { issue, comment } = payload;
   if (!human(comment.user, self)) return [];
   const kind = issue.pull_request === undefined ? "issue" : "pull request";
+  const repository = payload.repository.full_name;
   const message = {
-    address: issueAddress(payload.repository.full_name, issue.number),
+    address: issueAddress(repository, issue.number),
     text: lines(
       `@${comment.user.login} commented on ${kind} #${issue.number}:`,
       comment.body,
@@ -147,6 +152,9 @@ const issueComment: Handler = (payload, { requestId, self }) => {
     requestId,
     author: comment.user.login,
     event: "issue_comment.created",
+    replyContext: {
+      reactions: `/repos/${repository}/issues/comments/${comment.id}/reactions`,
+    },
   };
   return [{ message, options: {} }];
 };

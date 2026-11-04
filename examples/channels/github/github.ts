@@ -1,8 +1,10 @@
 import type {
   AdapterStart,
   ChannelAdapter,
+  ChannelEvent,
   Deliver,
   OutboundMessage,
+  ReplyTarget,
   SendContext,
 } from "@aliou/pi-durable-channels";
 import {
@@ -45,6 +47,9 @@ const ReviewComments = compile(
     ),
   ),
 );
+
+const Reactions = compile(obj({ reactions: str() }));
+const Reaction = compile(obj({ id: int() }, { open: true }));
 
 type Receiver = {
   deliver: Deliver;
@@ -113,6 +118,21 @@ export function githubChannel(options: GitHubOptions): ChannelAdapter {
     await call("POST", path, { body: text.slice(0, MAX_COMMENT) }, ctx.signal);
   }
 
+  const eyes = (path: string) => call("POST", path, { content: "eyes" });
+
+  async function removeEyes(path: string): Promise<void> {
+    const reaction = await eyes(path);
+    if (Reaction.check(reaction))
+      await call("DELETE", `${path}/${reaction.id}`);
+  }
+
+  async function events(target: ReplyTarget, event: ChannelEvent) {
+    if (!Reactions.check(target.replyContext)) return;
+    const { reactions } = target.replyContext;
+    if (event.type === "run_started") await eyes(reactions);
+    if (event.type === "run_ended") await removeEyes(reactions);
+  }
+
   return {
     start: async (ctx) => {
       const self = await options.auth.login(ctx.signal);
@@ -123,5 +143,6 @@ export function githubChannel(options: GitHubOptions): ChannelAdapter {
         ? new Response("Service Unavailable", { status: 503 })
         : receive(request, receiver),
     send,
+    events,
   };
 }

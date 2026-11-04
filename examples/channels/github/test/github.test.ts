@@ -18,6 +18,7 @@ import {
   type Call,
   fakeGitHub,
   payloads,
+  type Route,
   served,
   webhook,
 } from "./fake-github";
@@ -79,6 +80,14 @@ async function open(routes: Parameters<typeof fakeGitHub>[0] = {}) {
   );
   const hub = channels.hub(harness);
   return { github: served(github), hub, harness, seen, reports, ...api };
+}
+
+async function until(check: () => boolean): Promise<void> {
+  const start = Date.now();
+  while (!check()) {
+    if (Date.now() - start > 5000) throw new Error("condition not met in time");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 const comments = (calls: Call[]) =>
@@ -198,6 +207,52 @@ describe("github channel end to end", () => {
       "@ana reviewed pull request #5: changes requested\nsee notes\nhttps://github.com/acme/app/pull/5#v\nsrc/save.ts:12: rename\nREADME.md:3: typo",
     );
     expect(comments(calls)).toHaveLength(2);
+    await harness.close(context);
+  });
+
+  it("marks the issue or comment that started a run with eyes until the run ends", async () => {
+    const issue = "/repos/acme/app/issues/3/reactions";
+    const comment = "/repos/acme/app/issues/comments/503/reactions";
+    const reaction =
+      (path: string, id: number): Route =>
+      (_body, seen) => ({
+        status:
+          seen.filter((call) => call.path === path).length > 1 ? 200 : 201,
+        body: { id, content: "eyes" },
+      });
+    const { github, hub, harness, calls } = await open({
+      [`POST ${issue}`]: reaction(issue, 41),
+      [`DELETE ${issue}/41`]: () => ({ status: 204 }),
+      [`POST ${comment}`]: reaction(comment, 42),
+      [`DELETE ${comment}/42`]: () => ({ status: 204 }),
+    });
+    await hub.start();
+    const deleted = (path: string) =>
+      calls.some((call) => call.method === "DELETE" && call.path === path);
+    await github(webhook("issues", payloads.issueOpened(3)));
+    await until(() => deleted(`${issue}/41`));
+    await github(webhook("issue_comment", payloads.comment(3, "still broken")));
+    await until(() => deleted(`${comment}/42`));
+
+    const writes = calls
+      .filter(({ method }) => method !== "GET")
+      .map(({ method, path, body }) => [method, path, body]);
+    const eyes = { content: "eyes" };
+    const answer = (n: number) => [
+      "POST",
+      "/repos/acme/app/issues/3/comments",
+      { body: `answer ${n}` },
+    ];
+    expect(writes).toEqual([
+      ["POST", issue, eyes],
+      answer(1),
+      ["POST", issue, eyes],
+      ["DELETE", `${issue}/41`, undefined],
+      ["POST", comment, eyes],
+      answer(2),
+      ["POST", comment, eyes],
+      ["DELETE", `${comment}/42`, undefined],
+    ]);
     await harness.close(context);
   });
 });

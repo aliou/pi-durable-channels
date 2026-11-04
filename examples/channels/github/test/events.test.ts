@@ -17,6 +17,7 @@ describe("github events", () => {
           requestId: "github:d1",
           author: "ana",
           event: "issues.opened",
+          replyContext: { reactions: "/repos/acme/app/issues/3/reactions" },
         },
         options: {},
       },
@@ -33,6 +34,9 @@ describe("github events", () => {
           address: "acme/app#7",
           text: "@ana commented on pull request #7:\nwhy?\nhttps://github.com/acme/app/pull/7#c",
           event: "issue_comment.created",
+          replyContext: {
+            reactions: "/repos/acme/app/issues/comments/507/reactions",
+          },
         },
         options: {},
       },
