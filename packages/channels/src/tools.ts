@@ -10,6 +10,8 @@ import type { SendTask } from "./send";
 
 export const TOOLS_EXTENSION = "channels-tools";
 
+export const NO_REPLY = "no_reply";
+
 function text(value: string, isError = false) {
   return { output: [{ type: "text" as const, text: value }], isError };
 }
@@ -56,6 +58,18 @@ export function defineChannelTools(Send: SendTask): Extension {
     },
   });
 
+  const noReply = defineTool({
+    name: NO_REPLY,
+    description:
+      "End this run without answering. Use it when the latest message needs no answer from you, such as a thread message meant for someone else. Call it alone, without writing text.",
+    parameters: obj({}),
+    replay: "safe",
+    execute: async () => ({
+      ...text("No reply sent."),
+      control: { terminate: true },
+    }),
+  });
+
   const channelsSection = section(
     "channels",
     async ({ read, conversationId }, context) => {
@@ -73,7 +87,7 @@ export function defineChannelTools(Send: SendTask): Extension {
 
   return defineExtension({
     name: TOOLS_EXTENSION,
-    tools: [sendMessage, listAddresses],
+    tools: [sendMessage, listAddresses, noReply],
     sections: [channelsSection],
   });
 }

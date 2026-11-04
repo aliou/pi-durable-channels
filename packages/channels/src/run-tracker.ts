@@ -8,6 +8,7 @@ import type {
 import { ChannelMessage } from "./doc";
 import { replyKey, runEntries } from "./hook";
 import type { AdapterLookup } from "./send";
+import { stepsOf } from "./steps";
 import type { ChannelAdapter, ReplyProgress, ReplyTarget } from "./types";
 
 const context = BACKGROUND_CONTEXT;
@@ -18,7 +19,8 @@ type Run = {
   first: EntryId;
   inputs: string;
   recipients: Recipient[];
-  text: string;
+  titles: Map<string, string>;
+  cursor?: EntryId;
 };
 
 async function notify(
@@ -30,13 +32,6 @@ async function notify(
       .then(() => adapter.progress?.(target, update))
       .catch(() => undefined);
   }
-}
-
-function partialText(live: LiveState): string {
-  const content = live.generation?.message?.content ?? [];
-  return content
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("");
 }
 
 function stoppedOf(live: LiveState, run: Run): ReplyProgress | undefined {
@@ -84,18 +79,28 @@ export function runTracker(
     await notify(added, { type: "working" });
   }
 
-  async function stream(current: Run, live: LiveState): Promise<void> {
-    const text = partialText(live);
-    if (text === "" || text === current.text) return;
-    current.text = text;
-    await notify(current.recipients, { type: "text", text });
+  async function freshEntries(current: Run) {
+    const previous = current.cursor;
+    const first = previous ?? current.first;
+    const entries = await runEntries(conversation, { first }, context);
+    current.cursor = entries.at(-1)?.id ?? previous;
+    if (previous === undefined) return entries;
+    return entries.filter(({ id }) => id > previous);
+  }
+
+  async function steps(current: Run): Promise<void> {
+    const entries = await freshEntries(current);
+    for (const step of stepsOf(entries, current.titles))
+      await notify(current.recipients, { type: "step", step });
   }
 
   async function end(live: LiveState): Promise<void> {
     if (run === undefined) return;
     const stopped = stoppedOf(live, run);
-    const { recipients } = run;
+    const ended = run;
     run = undefined;
+    await steps(ended);
+    const { recipients } = ended;
     if (stopped !== undefined) await notify(recipients, stopped);
   }
 
@@ -103,8 +108,13 @@ export function runTracker(
     const first = live.run?.first;
     if (run !== undefined && run.first !== first) await end(live);
     if (live.run === undefined || first === undefined) return;
-    run ??= { first, inputs: "", recipients: [], text: "" };
+    run ??= {
+      first,
+      inputs: "",
+      recipients: [],
+      titles: new Map(),
+    };
     await admit(run, live.run);
-    await stream(run, live);
+    await steps(run);
   };
 }

@@ -14,12 +14,17 @@ export type InboundMessage = {
   text: string;
   requestId: string;
   author: string;
+  event?: string;
   files?: readonly InboundFile[];
   addressData?: JsonValue;
   replyContext?: JsonValue;
 };
 
-export type DeliverOptions = { whenBusy?: BusyPolicy; run?: boolean };
+export type DeliverOptions = {
+  whenBusy?: BusyPolicy;
+  run?: boolean;
+  create?: boolean;
+};
 
 export type OutboundPart = { type: "text"; text: string };
 
@@ -54,9 +59,16 @@ export type ReplyTarget = {
   idempotencyKey: string;
 };
 
+export type ReplyStep = {
+  id: string;
+  title: string;
+  status: "in_progress" | "complete" | "error";
+  details?: string;
+};
+
 export type ReplyProgress =
   | { type: "working" }
-  | { type: "text"; text: string }
+  | { type: "step"; step: ReplyStep }
   | { type: "stopped"; reason: "failed" | "aborted" };
 
 export type AdapterStart = {

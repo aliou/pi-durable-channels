@@ -98,7 +98,8 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     message: InboundMessage,
     options: Required<DeliverOptions>,
   ): Promise<DeliveryReceipt | undefined> {
-    const conversationId = await conversationFor(key, message, options.run);
+    const create = options.run && options.create;
+    const conversationId = await conversationFor(key, message, create);
     if (conversationId === undefined) return undefined;
     const conversation = await harness.conversation(conversationId, context);
     if (conversation === undefined)
@@ -143,6 +144,7 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     const resolved = {
       whenBusy: options?.whenBusy ?? setup.options.whenBusy ?? "queue",
       run: options?.run ?? true,
+      create: options?.create ?? true,
     };
     return serial(key, () => admit(key, message, resolved));
   };

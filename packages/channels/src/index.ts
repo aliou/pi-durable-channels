@@ -18,6 +18,7 @@ export type {
   OutboundMessage,
   OutboundPart,
   ReplyProgress,
+  ReplyStep,
   ReplyTarget,
   SendContext,
   SendResult,

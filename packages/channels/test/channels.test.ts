@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import {
   createModels,
   fauxAssistantMessage,
+  fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
@@ -517,6 +518,20 @@ describe("tools", () => {
     await harness.close(context);
   });
 
+  it("no_reply ends the run with an empty reply, which the adapter can use to clear its state", async () => {
+    const test = setup({ respond: callTool("no_reply", {}) });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const receipt = await deliver(inbound("call nobody", "evt-1"));
+    await harness.waitForIdle(context);
+    expect(test.adapter.sent.map(({ message }) => message.parts)).toEqual([[]]);
+    const conversation = await conversationOf(harness, receipt.conversationId);
+    const entries = await entriesOf(conversation);
+    expect(entries.some((entry) => textOf(entry).startsWith("done"))).toBe(
+      false,
+    );
+    await harness.close(context);
+  });
+
   it("list_addresses lists the conversation's own addresses, without transport data", async () => {
     const test = setup({ respond: callTool("list_addresses", {}) });
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
@@ -708,6 +723,23 @@ describe("adapters", () => {
     await expect(
       hub.deliver("web", inbound("chatter", "evt-1"), { run: false }),
     ).resolves.toBeUndefined();
+    await harness.close(context);
+  });
+
+  it("runs a message that may not create a conversation only on a bound address", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const options = { create: false };
+    await expect(
+      hub.deliver("web", inbound("chatter", "evt-1"), options),
+    ).resolves.toBeUndefined();
+    const first = await deliver(inbound("hi", "evt-2"));
+    const followUp = await deliver(inbound("more", "evt-3"), options);
+    await harness.waitForIdle(context);
+    expect(followUp.conversationId).toBe(first.conversationId);
+    expect(
+      test.adapter.sent.map(({ message }) => message.parts[0]?.text),
+    ).toEqual(["echo hi", "echo more"]);
     await harness.close(context);
   });
 
@@ -1025,25 +1057,39 @@ describe("progress", () => {
       .map(({ update }) => update.type)
       .filter((type, index, all) => all[index - 1] !== type);
 
-  it("reports work, streams the answer, and keys it like the reply", async () => {
-    const answer = "a fairly long answer that arrives in several pieces";
+  it("reports each tool call as a step, with the text before it, and keys it like the reply", async () => {
+    const held = { gate: gate() };
     const test = setup({
-      faux: { tokensPerSecond: 400, tokenSize: { min: 1, max: 1 } },
+      extensions: [holdTool(held)],
       settings: { progress: { partialIntervalMs: 0 } },
-      respond: () => fauxAssistantMessage(answer),
+      respond: (_text, last) =>
+        last?.role === "user"
+          ? fauxAssistantMessage(
+              [fauxText("Let me check."), fauxToolCall("work", {})],
+              { stopReason: "toolUse" },
+            )
+          : fauxAssistantMessage("done"),
     });
     const { updates } = withProgress(test);
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
     await hub.start();
     await deliver(inbound("hello", "evt-1", { replyContext: { ts: "1" } }));
-    await harness.waitForIdle(context);
-    expect(kinds(updates)).toEqual(["working", "text"]);
-    const texts = updates.flatMap(({ update }) =>
-      update.type === "text" ? [update.text] : [],
+    await eventually(() =>
+      updates.some(({ update }) => update.type === "step"),
     );
-    expect(texts.length).toBeGreaterThan(1);
-    expect(texts.every((text) => answer.startsWith(text))).toBe(true);
+    held.gate.open();
+    await harness.waitForIdle(context);
+    expect(kinds(updates)).toEqual(["working", "step"]);
+    const steps = updates.flatMap(({ update }) =>
+      update.type === "step" ? [update.step] : [],
+    );
+    expect(steps.map(({ status }) => status)).toEqual([
+      "in_progress",
+      "complete",
+    ]);
+    expect(steps[0]).toMatchObject({ title: "work", details: "Let me check." });
     const [sent] = test.adapter.sent;
+    expect(sent?.message.parts).toEqual([{ type: "text", text: "done" }]);
     expect(updates[0]?.target).toEqual({
       address: "thread-1",
       replyContext: { ts: "1" },
@@ -1065,7 +1111,9 @@ describe("progress", () => {
     const { harness, hub, deliver } = await test.open(new MemoryStorage());
     await hub.start();
     await deliver(inbound("start", "evt-1"));
-    await eventually(() => updates.length > 0);
+    await eventually(() =>
+      updates.some(({ update }) => update.type === "step"),
+    );
     const cancelled = started.cancel?.("thread-1");
     held.gate?.open();
     await cancelled;
@@ -1073,10 +1121,15 @@ describe("progress", () => {
     await eventually(() =>
       updates.some(({ update }) => update.type === "stopped"),
     );
-    expect(updates.map(({ update }) => update)).toEqual([
+    const seen = updates.map(({ update }) => update);
+    expect(seen.slice(0, 2)).toEqual([
       { type: "working" },
-      { type: "stopped", reason: "aborted" },
+      {
+        type: "step",
+        step: { id: expect.any(String), title: "work", status: "in_progress" },
+      },
     ]);
+    expect(seen.at(-1)).toEqual({ type: "stopped", reason: "aborted" });
     expect(test.adapter.sent).toEqual([]);
     await harness.close(context);
   });

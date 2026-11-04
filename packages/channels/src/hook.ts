@@ -51,7 +51,7 @@ export function replyHook(Send: SendTask): GenerationHooks["afterRun"] {
     const messages = entries.filter(ChannelMessage.is);
     if (messages.length === 0) return undefined;
     const answer = await api.entry(run.answer, context);
-    const parts = answerParts(answer);
+    const parts = run.reason === "terminate" ? [] : answerParts(answer);
     const tasks = messages.map(({ id, data: { author: _author, ...target } }) =>
       runEndTask(Send, { ...target, parts, idempotencyKey: replyKey(id) }),
     );
