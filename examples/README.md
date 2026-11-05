@@ -10,6 +10,7 @@ Adapters for `@aliou/pi-durable-channels`. Use cases import them by package name
 | --- | --- | --- |
 | `@examples/slack-channel` | `channels/slack/` | Socket Mode or HTTP events in, thread replies out |
 | `@examples/github-channel` | `channels/github/` | Repository webhooks in, issue and pull request comments out |
+| `@examples/linear-channel` | `channels/linear/` | Agent session webhooks in, agent activities out, with an elicitation tool |
 | `@examples/webhook-channel` | `channels/webhook/` | Reference HTTP adapter: JSON webhooks in, replies posted to allowed origins |
 
 ## Use cases
