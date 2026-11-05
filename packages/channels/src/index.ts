@@ -1,5 +1,12 @@
 export type { BindTarget } from "./bind";
 export { type Channels, createChannels } from "./core";
+export {
+  type Binding,
+  ChannelsDoc,
+  type ChannelsState,
+  conversationAddresses,
+  findBinding,
+} from "./doc";
 export type { ChannelsHub, HubOptions } from "./hub";
 export type {
   AdapterReport,
