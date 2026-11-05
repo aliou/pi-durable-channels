@@ -149,6 +149,8 @@ After `end`, another message creates a conversation only if the channel's factor
 
 `channels.tools` adds `send_message({ channel, address, text })`, `list_addresses()`, `no_reply()`, and an address prompt section. Sending and listing are restricted to addresses bound to the calling conversation. `send_message` queues a background notification; the final answer already goes to the inbound address.
 
+Channel packages that add their own tools reuse the same restriction: the package exports `ChannelsDoc`, `findBinding(state, { channel, address })`, and `conversationAddresses(state, conversationId)`, the helpers `channels.tools` itself uses. A tool reads the doc with `api.snapshot(ChannelsDoc, context)` and rejects addresses whose binding names another conversation.
+
 ## Reports
 
 `onReport` receives `admitted` with a duplicate flag, `ignored`, `send_retry`, `send_failed`, and adapter-supplied `skipped` or `adapter_error`, each with its channel. Send reports may repeat after restart; use them for logs, not accounting. A throwing report callback is ignored. The core writes nothing to the console.
