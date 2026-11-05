@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+echo "Configuring direnv"
+if [ ! -f .envrc ]; then
+  printf 'use flake\n' > .envrc
+fi
+direnv allow
+
+echo "Installing dependencies"
+direnv exec . pnpm install --frozen-lockfile
