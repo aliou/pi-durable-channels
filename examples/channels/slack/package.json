@@ -13,13 +13,13 @@
   "dependencies": {
     "@aliou/pi-durable-channels": "workspace:*",
     "@earendil-works/chord": "1.5.0",
-    "@earendil-works/pi-schema": "1.5.0"
+    "@earendil-works/pi-schema": "1.5.0",
+    "ws": "8.22.1"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "@types/ws": "^8.18.2",
-    "vitest": "^5.1.0",
-    "ws": "^8.22.1"
+    "vitest": "^5.1.0"
   }
 }

@@ -7,6 +7,7 @@ import {
   str,
   unknown,
 } from "@earendil-works/pi-schema";
+import WebSocket from "ws";
 import { parseJson } from "./body";
 
 const RECONNECT_MS = 1000;
@@ -28,7 +29,11 @@ export type SocketModeOptions = {
 
 export type SocketMode = { done: Promise<void> };
 
-type Connection = { closed: Promise<void> };
+type Connection = {
+  retiring: Promise<void>;
+  closed: Promise<void>;
+  retire(): void;
+};
 
 async function handleFrame(
   socket: WebSocket,
@@ -44,15 +49,21 @@ function connect(url: string, options: SocketModeOptions): Promise<Connection> {
   const socket = new WebSocket(url);
   const handling = new Set<Promise<void>>();
   const closed = new Promise<void>((resolve) =>
-    socket.addEventListener("close", () => resolve()),
+    socket.once("close", () => resolve()),
   );
+  let requestReplacement = () => {};
+  const retiring = new Promise<void>((resolve) => {
+    requestReplacement = resolve;
+  });
   let draining = false;
-  const drain = () => {
+  const retire = () => {
     draining = true;
-    void Promise.allSettled(handling).then(() => socket.close());
+    void Promise.allSettled(handling).then(() => socket.terminate());
   };
-  options.signal.addEventListener("abort", drain, { once: true });
-  void closed.then(() => options.signal.removeEventListener("abort", drain));
+  socket.on("error", () => undefined);
+  options.signal.addEventListener("abort", retire, { once: true });
+  void closed.then(() => options.signal.removeEventListener("abort", retire));
+  if (options.signal.aborted) retire();
 
   function handle(frame: Static<typeof FrameSchema>): void {
     if (draining) return;
@@ -64,18 +75,21 @@ function connect(url: string, options: SocketModeOptions): Promise<Connection> {
   }
 
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => socket.close(), options.helloMs ?? HELLO_MS);
+    const timer = setTimeout(
+      () => socket.terminate(),
+      options.helloMs ?? HELLO_MS,
+    );
     void closed.then(() => {
       clearTimeout(timer);
       reject(new Error("Slack Socket Mode closed before hello"));
     });
-    socket.addEventListener("message", (event) => {
-      const frame = parseJson(String(event.data));
+    socket.on("message", (data) => {
+      const frame = parseJson(String(data));
       if (!Frame.check(frame)) return;
-      if (frame.type === "disconnect") return drain();
+      if (frame.type === "disconnect") return requestReplacement();
       if (frame.type !== "hello") return handle(frame);
       clearTimeout(timer);
-      resolve({ closed });
+      resolve({ retiring, closed, retire });
     });
   });
 }
@@ -89,17 +103,19 @@ async function keepConnected(
   first: Connection,
   options: SocketModeOptions,
 ): Promise<void> {
-  let { closed } = first;
+  let current = first;
   while (true) {
-    await closed;
-    await delay(RECONNECT_MS, undefined, { signal: options.signal }).catch(
-      () => undefined,
-    );
-    if (options.signal.aborted) return;
-    closed = openAndConnect(options).then(
-      (connection) => connection.closed,
-      options.onError,
-    );
+    await Promise.race([current.retiring, current.closed]);
+    if (options.signal.aborted) return current.closed;
+    const next = await openAndConnect(options).catch(options.onError);
+    if (next === undefined) {
+      await delay(RECONNECT_MS, undefined, { signal: options.signal }).catch(
+        () => undefined,
+      );
+      continue;
+    }
+    current.retire();
+    current = next;
   }
 }
 

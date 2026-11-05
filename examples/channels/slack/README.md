@@ -52,11 +52,13 @@ hub.start → slack.start({ deliver, cancel, report, signal })
   auth.test → the bot's user ID; failure rejects start
   socketMode: apps.connections.open → WebSocket → resolve on hello                       (transport.ts, socket.ts)
     refused, closed, or no hello within 10 s → reject start
-    disconnect frame: stop taking events, close once the events being handled are acked, reconnect
-    later drops: reconnect after 1 s in the background, failures reported as adapter_error
+    disconnect frame: open a replacement and keep handling events until it has hello; then stop taking events,
+      terminate once the events being handled are acked
+    later drops: reconnect at once in the background, 1 s between failed attempts, failures reported as adapter_error
   httpEvents: slack.fetch accepts requests (503 before start)
 
-hub.stop → signal aborts → each socket closes once the events it is handling are acked
+hub.stop → signal aborts → each socket stops taking events and terminates once the events it is handling are acked,
+           without waiting for Slack to answer a close frame
   events arriving after that are not acked; Slack resends them
   failures after the abort are not reported
   slack.stop resolves when the reconnect loop has exited
@@ -130,6 +132,7 @@ session naming and a person's rename, a thread where the agent declines with `no
 Socket Mode runs against a local WebSocket server: `start` waits for `hello`, a bad bot token or a refused
 `apps.connections.open` rejects it, and an event in flight at stop is acked before the socket closes.
 `socket.test.ts` drives the connection on its own: a socket that closes before `hello` or sends none in time rejects
-`start`, events being handled are acked before the socket closes at stop or on `disconnect`, and nothing is reported
-once stopped.
+`start`, events being handled are acked before the socket closes at stop, stop does not wait on a server that ignores
+close frames, a `disconnect` opens the replacement before the old socket closes, an unexpected drop reconnects at once,
+and nothing is reported once stopped.
 `nix develop -c pnpm --filter @examples/slack-channel test`.

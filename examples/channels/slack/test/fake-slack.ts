@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import type { ChannelAdapter } from "@aliou/pi-durable-channels";
 import { afterEach } from "vitest";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
@@ -15,7 +15,7 @@ export type Call = {
 
 export type FakeSocket = {
   log: string[];
-  send(frame: unknown): void;
+  send(frame: unknown, connection?: number): void;
   close(): void;
 };
 
@@ -29,6 +29,7 @@ export type FakeSlack = {
 export type FakeOptions = {
   refuse?: string[];
   hello?: boolean;
+  dropAfterMs?: number;
   holdFiles?: Promise<void>;
 };
 
@@ -49,13 +50,26 @@ function reply(
   return { ok: true, ts: ts() };
 }
 
-function socketMode(sockets: WebSocketServer, hello: boolean): FakeSocket {
+function dropLikeSlack(socket: WsSocket, afterMs: number): void {
+  const raw = (socket as unknown as { _socket: Socket })._socket;
+  socket.close = () => {
+    const timer = setTimeout(() => raw.destroy(), afterMs);
+    raw.once("close", () => clearTimeout(timer));
+  };
+}
+
+function socketMode(
+  sockets: WebSocketServer,
+  options: FakeOptions,
+): FakeSocket {
   const log: string[] = [];
-  let client: WsSocket | undefined;
+  const clients: WsSocket[] = [];
   sockets.on("connection", (socket) => {
-    client = socket;
+    clients.push(socket);
     log.push("connected");
-    if (hello) socket.send(JSON.stringify({ type: "hello" }));
+    if (options.dropAfterMs !== undefined)
+      dropLikeSlack(socket, options.dropAfterMs);
+    if (options.hello ?? true) socket.send(JSON.stringify({ type: "hello" }));
     socket.on("message", (data) => {
       log.push(`ack ${JSON.parse(String(data)).envelope_id}`);
     });
@@ -63,8 +77,9 @@ function socketMode(sockets: WebSocketServer, hello: boolean): FakeSocket {
   });
   return {
     log,
-    send: (frame) => client?.send(JSON.stringify(frame)),
-    close: () => client?.close(),
+    send: (frame, connection = clients.length - 1) =>
+      clients[connection]?.send(JSON.stringify(frame)),
+    close: () => clients.at(-1)?.close(),
   };
 }
 
@@ -101,7 +116,7 @@ export async function fakeSlack(
     });
   });
   const sockets = new WebSocketServer({ server, path: "/socket" });
-  const socket = socketMode(sockets, options.hello ?? true);
+  const socket = socketMode(sockets, options);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   servers.push(() => {
     for (const client of sockets.clients) client.terminate();

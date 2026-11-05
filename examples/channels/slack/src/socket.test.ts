@@ -60,25 +60,65 @@ describe("slack socket mode connection", () => {
     expect(server.log).toEqual(["connected", "ack E1", "closed"]);
   });
 
-  it("acks the frames it is handling on disconnect, then reconnects", async () => {
+  it("stops without waiting for Slack to answer the close", async () => {
+    const { server, started, controller } = await socketMode({
+      dropAfterMs: 2000,
+    });
+    const { done } = await started;
+    const stopping = Date.now();
+    controller.abort();
+    await done;
+    expect(Date.now() - stopping).toBeLessThan(500);
+    await until(() => server.log.includes("closed"));
+  });
+
+  it("opens the replacement on disconnect and retires the old socket once it has hello", async () => {
     const held = gate();
     let handling = false;
-    const { server, started, controller } = await socketMode({}, () => ({
-      onPayload: async () => {
-        handling = true;
-        await held.promise;
-      },
-    }));
+    const { server, started, controller } = await socketMode(
+      { hello: false },
+      () => ({
+        onPayload: async () => {
+          handling = true;
+          await held.promise;
+        },
+      }),
+    );
+    await until(() => server.log.includes("connected"));
+    server.send({ type: "hello" });
     const { done } = await started;
     server.send(envelope("E1"));
     await until(() => handling);
-    server.send({ type: "disconnect" });
-    server.send(envelope("E2"));
+    server.send({ type: "disconnect", reason: "warning" }, 0);
+    server.send(envelope("E2"), 0);
+    await until(() => server.log.length === 2);
     await pause();
-    expect(server.log).toEqual(["connected"]);
+    expect(server.log).toEqual(["connected", "connected"]);
     held.open();
     await until(() => server.log.length === 4);
-    expect(server.log).toEqual(["connected", "ack E1", "closed", "connected"]);
+    await pause();
+    expect(server.log).toEqual(["connected", "connected", "ack E1", "ack E2"]);
+    server.send({ type: "hello" }, 1);
+    await until(() => server.log.includes("closed"));
+    expect(server.log).toEqual([
+      "connected",
+      "connected",
+      "ack E1",
+      "ack E2",
+      "closed",
+    ]);
+    controller.abort();
+    await done;
+  });
+
+  it("reconnects at once after an unexpected drop", async () => {
+    const { server, started, controller } = await socketMode();
+    const { done } = await started;
+    const dropped = Date.now();
+    server.close();
+    await until(() => server.log.length === 3);
+    expect(server.log).toEqual(["connected", "closed", "connected"]);
+    expect(Date.now() - dropped).toBeLessThan(500);
     controller.abort();
     await done;
   });
