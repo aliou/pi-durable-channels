@@ -8,5 +8,10 @@ if [ ! -f .envrc ]; then
 fi
 direnv allow
 
+# Keep .direnv (flake symlinks) out of git and biome's scan; local to this clone.
+if ! grep -qx '.direnv' .git/info/exclude 2>/dev/null; then
+  echo '.direnv' >> .git/info/exclude
+fi
+
 echo "Installing dependencies"
 direnv exec . pnpm install --frozen-lockfile
