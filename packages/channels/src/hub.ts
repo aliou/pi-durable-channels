@@ -103,6 +103,7 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
         ownership: { kind: "ownerless" },
       });
       await configure(tx, record.id, created.agent ?? {});
+      await created.init?.(tx, record.id);
       await bindAddress(tx, key, record.id);
       return record.id;
     }, context);

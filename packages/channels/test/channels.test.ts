@@ -8,7 +8,9 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai";
 import {
+  AgentDoc,
   createRegistry,
+  defineDoc,
   defineExtension,
   defineTool,
   GenerationTask,
@@ -96,6 +98,115 @@ describe("delivery", () => {
     await expect(hub.status(receipt.submissionId)).resolves.toEqual({
       state: "done",
     });
+    await harness.close(context);
+  });
+
+  it("initializes documents with the configured agent in the creating commit", async () => {
+    const InitDoc = defineDoc<{ agent: string | null }>({
+      kind: "test.channel-init",
+      version: 1,
+      scope: "conversation",
+      history: "latest",
+      fork: "current",
+      initial: () => ({ agent: null }),
+      checkpointWhen: () => false,
+    });
+    const test = setup({
+      conversation: () => ({
+        agent: { model: MODEL, instructions: "Configured during creation" },
+        init: async (tx, conversationId) => {
+          const agent = await tx.doc(AgentDoc, conversationId);
+          const state = await tx.doc(InitDoc, conversationId);
+          state.agent = agent.instructions ?? null;
+        },
+      }),
+    });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const receipt = await deliver(inbound("hello", "evt-1"));
+    await expect(
+      harness.snapshot(InitDoc, receipt.conversationId, context),
+    ).resolves.toEqual({
+      agent: "Configured during creation",
+    });
+    await harness.close(context);
+  });
+
+  it("rolls back conversation creation and binding when init fails", async () => {
+    const test = setup({
+      conversation: () => ({
+        agent: { model: MODEL },
+        init: () => {
+          throw new Error("init failed");
+        },
+      }),
+    });
+    const { harness, hub } = await test.open(new MemoryStorage());
+    await expect(hub.deliver("web", inbound("hello", "evt-1"))).rejects.toThrow(
+      "init failed",
+    );
+    await expect(
+      hub.conversationOf({ channel: "web", address: "thread-1" }),
+    ).resolves.toBeUndefined();
+    const conversations = await harness.commit(
+      (tx) => tx.scanConversations({}, 10),
+      context,
+    );
+    expect(conversations.items).toEqual([]);
+    await harness.close(context);
+  });
+
+  it("runs neither the factory nor init for an existing binding", async () => {
+    const calls = { factory: 0, init: 0 };
+    const test = setup({
+      conversation: () => {
+        calls.factory++;
+        return {
+          agent: { model: MODEL },
+          init: () => {
+            calls.init++;
+          },
+        };
+      },
+    });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    await deliver(inbound("one", "evt-1"));
+    await deliver(inbound("two", "evt-2"));
+    expect(calls).toEqual({ factory: 1, init: 1 });
+    await harness.close(context);
+  });
+
+  it("finishes asynchronous init before admitting the message", async () => {
+    const entered = gate();
+    const finish = gate();
+    const test = setup({
+      conversation: () => ({
+        agent: { model: MODEL },
+        init: async () => {
+          entered.open();
+          await finish.promise;
+        },
+      }),
+    });
+    const storage = new MemoryStorage();
+    const { harness, hub } = await test.open(storage);
+    let admitted = false;
+    const delivery = accepted(
+      hub.deliver("web", inbound("hello", "evt-1")),
+    ).then((receipt) => {
+      admitted = true;
+      return receipt;
+    });
+    await entered.promise;
+    expect(admitted).toBe(false);
+    const pending = await storage.scanSubmissions({}, 10, undefined, context);
+    expect(pending.items).toEqual([]);
+    finish.open();
+    const receipt = await delivery;
+    const stored = await storage.scanSubmissions({}, 10, undefined, context);
+    expect(stored.items.map(({ id }) => id)).toEqual([receipt.submissionId]);
+    await expect(
+      hub.conversationOf({ channel: "web", address: "thread-1" }),
+    ).resolves.toBe(receipt.conversationId);
     await harness.close(context);
   });
 

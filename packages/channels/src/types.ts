@@ -3,6 +3,7 @@ import type { JsonObject } from "@earendil-works/pi-ai";
 import type {
   AgentChange,
   ConversationId,
+  ConversationInit,
   SubmissionId,
 } from "@earendil-works/pi-durable";
 
@@ -118,7 +119,10 @@ export type ChannelAdapter = {
 
 export type AddressKey = { channel: string; address: string };
 
-export type ConversationSetup = { agent?: AgentChange };
+export type ConversationSetup = {
+  agent?: AgentChange;
+  init?: ConversationInit;
+};
 
 export type ChannelRegistration = {
   adapter: ChannelAdapter;

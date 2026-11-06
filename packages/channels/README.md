@@ -70,6 +70,8 @@ It prints `Hello from pi-durable.`. For crash recovery, use a persistent pi-dura
 
 A channel is a host-assigned name, not an agent persona. Its optional `conversation(message, { channel })` factory creates a conversation for an unknown address. Returning `undefined` ignores the message. Without a factory, only bound addresses accept messages. `message.event` can select an agent, but is not stored in the channel entry.
 
+The factory returns `agent` creation defaults and an optional `init(tx, conversationId)` callback. Creation, configuration, initialization, and address binding share one commit. `init` runs after the agent is configured and before the address is bound; it can read and write conversation documents, and asynchronous work finishes before message admission continues. Table reads are unavailable after creation, so use `tx.doc()` for document access. A failure rolls back the conversation and binding. An existing binding skips the factory and initialization.
+
 If an agent selects extensions through an explicit list, binding adds `channels` to that list. Select `channels-tools` separately if the agent needs its tools. Without an explicit list, pi-durable selects installed extensions according to its defaults.
 
 Start the hub after opening the Harness. On shutdown, stop the hub before closing the Harness.
