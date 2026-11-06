@@ -1,5 +1,11 @@
 # @aliou/pi-durable-channels
 
+## 0.2.0
+
+### Minor Changes
+
+- c87d00b: Support transactional conversation initialization during channel creation. `ConversationSetup.init` runs after agent configuration and before address binding in the creating commit.
+
 ## 0.1.0
 
 ### Minor Changes
