@@ -1,6 +1,6 @@
 {
   "name": "@aliou/pi-durable-channels",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Durable inbound and outbound messaging channels for pi-durable hosts",
   "license": "MIT",
   "type": "module",
