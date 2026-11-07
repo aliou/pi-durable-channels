@@ -4,6 +4,7 @@ packages:
   - "examples/use-cases/*"
 minimumReleaseAgeExclude:
   - tsdown@0.23.5
+  - '@aliou/biome-plugins@0.18.0 || 0.18.1'
 allowBuilds:
   "@google/genai": false
   protobufjs: false

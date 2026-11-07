@@ -12,7 +12,7 @@
     "node": ">=24.0.0"
   },
   "devDependencies": {
-    "@aliou/biome-plugins": "^0.16.0",
+    "@aliou/biome-plugins": "^0.18.1",
     "@biomejs/biome": "^2.6.4",
     "@changesets/cli": "^3.0.3",
     "@types/node": "^25.0.10",

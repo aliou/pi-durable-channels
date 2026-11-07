@@ -1,33 +1,10 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.4/schema.json",
-  "vcs": {
-    "enabled": true,
-    "clientKind": "git",
-    "useIgnoreFile": true
-  },
+  "extends": ["@aliou/biome-plugins/configs/base"],
   "files": {
     "includes": ["**/*.ts", "**/*.json"],
     "ignoreUnknown": true
   },
-  "assist": {
-    "actions": {
-      "source": {
-        "organizeImports": "on"
-      }
-    }
-  },
-  "linter": {
-    "enabled": true,
-    "rules": {
-      "preset": "recommended"
-    }
-  },
-  "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2
-  },
-  "plugins": ["@aliou/biome-plugins/presets/recommended"],
   "overrides": [
     {
       "includes": ["packages/channels/src/types.ts"],
