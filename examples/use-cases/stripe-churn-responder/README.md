@@ -7,7 +7,7 @@ discount guidance, and a draft email for the account owner. Customer success fol
 ## How it works
 
 Stripe is an event source, not a conversation, so it is not a channel. A plain host route filters events and hands
-churn signals to the `slack` channel (`@examples/slack-channel`, in `examples/channels/slack`):
+churn signals to the `slack` channel (`@aliou/pi-durable-channels-slack`):
 
 ```text
 Stripe → POST /stripe/webhook                      host route (events.ts)

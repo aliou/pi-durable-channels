@@ -106,7 +106,7 @@ The start context's `signal` aborts during hub shutdown. The send context has it
 
 Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. A reply with no parts means `no_reply`; post nothing and clear the adapter's presentation state.
 
-[Slack, GitHub, and webhook adapters](https://github.com/aliou/pi-durable-channels/tree/main/examples/channels) are copyable examples, not published adapter packages. The [examples guide](https://github.com/aliou/pi-durable-channels/tree/main/examples) covers complete platform integrations.
+Use the published [Slack adapter](https://github.com/aliou/pi-durable-channels/tree/main/packages/slack) for Slack. [GitHub and webhook adapters](https://github.com/aliou/pi-durable-channels/tree/main/examples/channels) are copyable examples, not published adapter packages. The [examples guide](https://github.com/aliou/pi-durable-channels/tree/main/examples) covers complete platform integrations.
 
 ## Outbound parts
 

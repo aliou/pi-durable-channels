@@ -1,0 +1,48 @@
+{
+  "name": "@aliou/pi-durable-channels-slack",
+  "version": "0.0.0",
+  "description": "Slack channel adapter for pi-durable channels",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aliou/pi-durable-channels",
+    "directory": "packages/slack"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "check": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@aliou/pi-durable-channels": "workspace:*",
+    "@earendil-works/chord": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.0",
+    "@types/ws": "^8.18.2",
+    "vitest": "^5.1.0"
+  }
+}

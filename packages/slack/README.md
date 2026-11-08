@@ -1,11 +1,15 @@
-# slack-channel
+# @aliou/pi-durable-channels-slack
 
 A Slack adapter. Messages arrive over Socket Mode or the Events API. Each thread is one conversation, in channels and
 DMs, and an agent session with Slack's "Working…" status, stop button, and title. While the agent works, its tool calls
 and its narration between them show in a folded plan ("Done: 12 steps ›"), and the answer follows as its own message.
 
+```sh
+pnpm add @aliou/pi-durable-channels @aliou/pi-durable-channels-slack
+```
+
 ```ts
-import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
+import { httpEvents, slackChannel, socketMode } from "@aliou/pi-durable-channels-slack";
 
 const slack = slackChannel({
   botToken,
@@ -135,4 +139,4 @@ Socket Mode runs against a local WebSocket server: `start` waits for `hello`, a 
 `start`, events being handled are acked before the socket closes at stop, stop does not wait on a server that ignores
 close frames, a `disconnect` opens the replacement before the old socket closes, an unexpected drop reconnects at once,
 and nothing is reported once stopped.
-`nix develop -c pnpm --filter @examples/slack-channel test`.
+`nix develop -c pnpm --filter @aliou/pi-durable-channels-slack test`.

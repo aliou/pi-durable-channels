@@ -4,11 +4,10 @@ Every directory here is a private workspace package. None of them is published.
 
 ## Channels
 
-Adapters for `@aliou/pi-durable-channels`. Use cases import them by package name.
+Example adapters for `@aliou/pi-durable-channels`. Use cases import them by package name. Slack is published separately as [`@aliou/pi-durable-channels-slack`](../packages/slack/README.md).
 
 | Package | Directory | What it does |
 | --- | --- | --- |
-| `@examples/slack-channel` | `channels/slack/` | Socket Mode or HTTP events in, thread replies out |
 | `@examples/github-channel` | `channels/github/` | Repository webhooks in, issue and pull request comments out |
 | `@examples/webhook-channel` | `channels/webhook/` | Reference HTTP adapter: JSON webhooks in, replies posted to allowed origins |
 

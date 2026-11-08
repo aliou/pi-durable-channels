@@ -8,11 +8,14 @@ See [the package README](packages/channels/README.md) for installation, a comple
 
 ## Examples
 
-The [examples guide](examples/README.md) covers setup and commands. All adapters and agents are private workspace packages; copy and adapt them for your host.
+The [examples guide](examples/README.md) covers setup and commands. Example adapters and agents are private workspace packages; copy and adapt them for your host.
 
-Adapters:
+Published adapters:
 
-- [Slack](examples/channels/slack/README.md): Socket Mode or HTTP events, thread replies, status, and tool-call timelines.
+- [Slack](packages/slack/README.md): Socket Mode or HTTP events, thread replies, status, and tool-call timelines.
+
+Example adapters:
+
 - [GitHub](examples/channels/github/README.md): repository webhooks, issue and pull request comments, and run reactions.
 - [Webhook](examples/channels/webhook/README.md): authenticated JSON messages and replies to allowlisted origins.
 

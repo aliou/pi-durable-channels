@@ -10,12 +10,12 @@
   },
   "dependencies": {
     "@aliou/pi-durable-channels": "workspace:*",
+    "@aliou/pi-durable-channels-slack": "workspace:*",
     "@earendil-works/pi-ai": "1.5.0",
     "@earendil-works/pi-durable": "1.5.0",
     "@earendil-works/pi-schema": "1.5.0",
     "@examples/github-channel": "workspace:*",
-    "@examples/shared": "workspace:*",
-    "@examples/slack-channel": "workspace:*"
+    "@examples/shared": "workspace:*"
   },
   "devDependencies": {
     "@earendil-works/chord": "1.5.0",

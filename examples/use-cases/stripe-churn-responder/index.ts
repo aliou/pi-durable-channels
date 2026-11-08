@@ -3,11 +3,15 @@ import {
   type ChannelAdapter,
   createChannels,
 } from "@aliou/pi-durable-channels";
+import {
+  httpEvents,
+  slackChannel,
+  socketMode,
+} from "@aliou/pi-durable-channels-slack";
 import { logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, type Route, run } from "@examples/shared/run";
 import { IGNORE } from "@examples/shared/sink";
-import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
 import { stripeEvents } from "./src/events";
 import { churnTools } from "./src/tools";
 

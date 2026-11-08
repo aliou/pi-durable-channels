@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  httpEvents,
+  slackChannel,
+  socketMode,
+} from "@aliou/pi-durable-channels-slack";
+import {
   appInstallation,
   githubApi,
   githubChannel,
@@ -9,7 +14,6 @@ import {
 import { activityLog, logged, logReport } from "@examples/shared/log";
 import { loadModel } from "@examples/shared/model";
 import { adapterRoute, run } from "@examples/shared/run";
-import { httpEvents, slackChannel, socketMode } from "@examples/slack-channel";
 import { softwareFactory } from "./src/factory";
 import { threadNamer } from "./src/naming";
 import { createWorkspace } from "./src/workspace";

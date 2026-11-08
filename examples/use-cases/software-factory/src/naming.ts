@@ -1,6 +1,6 @@
+import type { NameThread } from "@aliou/pi-durable-channels-slack";
 import type { Models } from "@earendil-works/pi-ai";
 import type { ModelRef } from "@earendil-works/pi-durable";
-import type { NameThread } from "@examples/slack-channel";
 
 const MAX_INPUT = 2_000;
 
