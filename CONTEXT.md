@@ -8,6 +8,10 @@ A registration installed in a pi-durable Harness registry, such as `channels.ext
 
 A channel is a host-assigned name, such as `slack`. An adapter connects that channel to a platform and owns its transport, authentication, and address format; the channel name is not an agent persona.
 
+## Outbound representation and format
+
+An outbound representation is platform-specific JSON content carried alongside required fallback text. Its format key identifies the representation contract an adapter can consume, not the host-assigned channel name; adapters that do not consume the format deliver the fallback text.
+
 ## Address and conversation
 
 An address identifies a destination within a channel, such as a Slack thread. A conversation holds durable agent state; several addresses, including aliases, can bind to the same conversation, but an address belongs to only one conversation at a time.

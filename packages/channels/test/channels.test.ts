@@ -17,11 +17,19 @@ import {
   Harness,
   hook,
   MemoryStorage,
+  type Storage,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { obj } from "@earendil-works/pi-schema";
 import { describe, expect, it } from "vitest";
-import type { AdapterStart, ChannelEvent, ReplyTarget } from "../src";
+import type {
+  AdapterStart,
+  ChannelAdapter,
+  ChannelEvent,
+  OutboundPart,
+  ReplyTarget,
+} from "../src";
+import { defineSendTask } from "../src/send";
 import {
   accepted,
   context,
@@ -44,6 +52,59 @@ import {
   testAdapter,
   textOf,
 } from "./support";
+
+const representedParts = [
+  {
+    type: "text",
+    text: "Deployment completed.",
+    representations: {
+      "test.blocks": {
+        blocks: [
+          {
+            type: "section",
+            text: { type: "markdown", text: "*Deployment completed.*" },
+          },
+        ],
+      },
+      "test.metadata": { service: "api", attempts: [1, 2] },
+    },
+  },
+] satisfies OutboundPart[];
+
+async function openSendHarness(storage: Storage, adapter: ChannelAdapter) {
+  const Send = defineSendTask(
+    () => adapter,
+    { attempts: 3, baseDelayMs: 1 },
+    () => {},
+  );
+  const registry = createRegistry();
+  registry.install(defineExtension({ name: "test-send", tasks: [Send] }));
+  const harness = await Harness.open(
+    storage,
+    { models: createModels(), registry },
+    context,
+  );
+  const createSend = () =>
+    harness.commit(async (tx) => {
+      const conversation = await tx.createConversation({
+        ownership: { kind: "ownerless" },
+      });
+      await tx.createTask(
+        Send,
+        {
+          channel: "web",
+          address: "thread-1",
+          parts: representedParts,
+          idempotencyKey: "reply:represented",
+        },
+        {
+          ownership: { kind: "conversation" },
+          conversationId: conversation.id,
+        },
+      );
+    }, context);
+  return { createSend, harness };
+}
 
 describe("delivery", () => {
   it("creates a conversation for a new address with the host's config and replies to it", async () => {
@@ -415,6 +476,56 @@ describe("busy conversations", () => {
 });
 
 describe("send failures and recovery", () => {
+  it("preserves representations and the idempotency key through a retry", async () => {
+    const adapter = testAdapter();
+    adapter.failures = 1;
+    const { createSend, harness } = await openSendHarness(
+      new MemoryStorage(),
+      adapter,
+    );
+    await createSend();
+    await harness.waitForIdle(context);
+
+    expect(adapter.sent.map(({ message }) => message.parts)).toEqual([
+      representedParts,
+      representedParts,
+    ]);
+    expect(adapter.sent.map(({ ctx }) => ctx.idempotencyKey)).toEqual([
+      "reply:represented",
+      "reply:represented",
+    ]);
+    await harness.close(context);
+  });
+
+  it("recovers stored representations and the original key after a crash", async () => {
+    const storage = await sqliteStorage();
+    const adapter = testAdapter();
+    adapter.hold = true;
+    const opened = await storage();
+    const crashing = killable(opened);
+    const first = await openSendHarness(crashing.storage, adapter);
+    await first.createSend();
+    first.harness.resume();
+    await eventually(() => adapter.sent.length === 1);
+    crashing.kill();
+
+    adapter.hold = false;
+    const reopened = await storage();
+    const second = await openSendHarness(reopened, adapter);
+    second.harness.resume();
+    await second.harness.waitForIdle(context);
+
+    expect(adapter.sent.map(({ message }) => message.parts)).toEqual([
+      representedParts,
+      representedParts,
+    ]);
+    expect(adapter.sent.map(({ ctx }) => ctx.idempotencyKey)).toEqual([
+      "reply:represented",
+      "reply:represented",
+    ]);
+    await second.harness.close(context);
+  });
+
   it("retries a failed send with the same idempotency key", async () => {
     const test = setup();
     test.adapter.failures = 2;

@@ -28,7 +28,11 @@ export type DeliverOptions = {
   create?: boolean;
 };
 
-export type OutboundPart = { type: "text"; text: string };
+export type OutboundPart = {
+  type: "text";
+  text: string;
+  representations?: Readonly<Record<string, JsonValue>>;
+};
 
 export type OutboundMessage = {
   address: string;
@@ -109,6 +113,7 @@ export type ChannelAdapter = {
   start?(ctx: AdapterStart): void | Promise<void>;
   stop?(): Promise<void>;
   fetch?(request: Request): Promise<Response>;
+  formats?: readonly string[];
   send(
     message: OutboundMessage,
     ctx: SendContext,

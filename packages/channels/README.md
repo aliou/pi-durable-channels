@@ -90,11 +90,12 @@ An address identifies a destination within a channel, such as a Slack thread. Se
 
 Implement the exported `ChannelAdapter` type:
 
-| Method | Contract |
+| Member | Contract |
 | --- | --- |
 | `start(ctx)` | Optional. Keep `deliver`, `cancel`, and `report`; resolve once the transport is ready. A rejection fails `hub.start()` |
 | `stop()` | Optional. Resolve once the transport is closed |
 | `fetch(request)` | Optional HTTP entry point, mounted by the host. Socket and polling adapters omit it |
+| `formats` | Optional list of outbound representation keys the adapter can consume |
 | `send(message, ctx)` | Required. Post the outbound parts; throwing retries the send |
 | `events(target, event)` | Optional best-effort run presentation |
 | `fetchFile(url)` | Optional authenticated attachment download |
@@ -106,6 +107,31 @@ The start context's `signal` aborts during hub shutdown. The send context has it
 Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. A reply with no parts means `no_reply`; post nothing and clear the adapter's presentation state.
 
 [Slack, GitHub, and webhook adapters](https://github.com/aliou/pi-durable-channels/tree/main/examples/channels) are copyable examples, not published adapter packages. The [examples guide](https://github.com/aliou/pi-durable-channels/tree/main/examples) covers complete platform integrations.
+
+## Outbound parts
+
+Every outbound part contains readable fallback text and can carry platform-specific JSON representations:
+
+```ts
+{
+  type: "text",
+  text: "Deployment completed for api.",
+  representations: {
+    "slack.block-kit": {
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "*Deployment completed* for api." },
+        },
+      ],
+    },
+  },
+}
+```
+
+Representation keys identify formats, not host-assigned channel names. An adapter's `formats` property lists the keys it can consume. The adapter selects, validates, and renders those representations; the core contains no native format schemas or rendering rules. An adapter without a suitable representation delivers the part's required `text`.
+
+Durable sends persist the source parts. Retries and recovery pass the same representations and idempotency key to the configured adapter. Final replies and `send_message` create text-only parts; channel-specific producer tools can supply representations without changing the core delivery contract.
 
 ## Delivery and retries
 
