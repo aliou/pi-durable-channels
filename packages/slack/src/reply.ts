@@ -6,13 +6,19 @@ import type {
   SendResult,
 } from "@aliou/pi-durable-channels";
 import { compile, obj, opt, str } from "@earendil-works/pi-schema";
-import type { SlackCall } from "./api";
+import { SlackApiError, type SlackCall } from "./api";
+import { blockKitBlocks } from "./block-kit";
 import type { Naming } from "./naming";
 import { createPlans, narrationStep, titleOf } from "./plan";
 import { type SessionStatus, setSessionStatus } from "./session";
 import { slackTarget, type Thread, threadOf } from "./target";
 
 const MAX_TEXT = 12_000;
+const CONTENT_ERRORS = new Set([
+  "invalid_blocks",
+  "invalid_blocks_format",
+  "msg_blocks_too_long",
+]);
 
 const Posted = compile(obj({ ts: str() }, { open: true }));
 const Requester = compile(obj({ user: str(), request: opt(str()) }));
@@ -49,11 +55,29 @@ export function slackReplies(
   ): Promise<SendResult | undefined> {
     const { channel, threadTs } = slackTarget(message.address, ctx.addressData);
     const thread = threadTs === undefined ? {} : { thread_ts: threadTs };
-    const posted = await call(
-      "chat.postMessage",
-      { channel, markdown_text: text, ...thread },
-      ctx.signal,
-    );
+    const blocks = blockKitBlocks(message);
+    const content =
+      blocks === undefined ? { markdown_text: text } : { text, blocks };
+    let posted: Record<string, unknown>;
+    try {
+      posted = await call(
+        "chat.postMessage",
+        { channel, ...content, ...thread },
+        ctx.signal,
+      );
+    } catch (error) {
+      if (
+        blocks === undefined ||
+        !(error instanceof SlackApiError) ||
+        !CONTENT_ERRORS.has(error.code)
+      )
+        throw error;
+      posted = await call(
+        "chat.postMessage",
+        { channel, markdown_text: text, ...thread },
+        ctx.signal,
+      );
+    }
     const root = Posted.check(posted) ? posted.ts : undefined;
     const sessionTs = threadTs ?? root;
     if (sessionTs !== undefined)

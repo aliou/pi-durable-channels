@@ -1,7 +1,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ChannelReport, createChannels } from "@aliou/pi-durable-channels";
+import {
+  type ChannelReport,
+  createChannels,
+  type OutboundPart,
+  type SendContext,
+} from "@aliou/pi-durable-channels";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   type AssistantMessage,
@@ -35,6 +40,7 @@ import {
   signed,
   until,
 } from "../test/fake-slack";
+import { SLACK_BLOCK_KIT, type SlackBlockKit } from "./block-kit";
 import type { ThreadMessages } from "./events";
 import type { NameThread } from "./naming";
 import { slackChannel } from "./slack";
@@ -181,6 +187,48 @@ const methods = (calls: Call[]) =>
   calls
     .map(({ method }) => method)
     .filter((method, index, all) => all[index - 1] !== method);
+
+const nativeBlock = {
+  type: "section",
+  text: { type: "mrkdwn", text: "*Deployment completed*" },
+};
+
+function represented(
+  text: string,
+  blocks: SlackBlockKit["blocks"] = [nativeBlock],
+): OutboundPart {
+  return {
+    type: "text",
+    text,
+    representations: { [SLACK_BLOCK_KIT]: { blocks } },
+  };
+}
+
+async function direct(
+  options: { fake?: FakeOptions; nameThread?: NameThread } = {},
+) {
+  const api = await fakeSlack({}, options.fake);
+  const slack = slackChannel({
+    botToken: "xoxb-test",
+    transport: httpEvents(SECRET),
+    apiUrl: api.apiUrl,
+    nameThread: options.nameThread,
+  });
+  const send = (
+    parts: OutboundPart[],
+    address = "D1:200.000100",
+    replyContext?: SendContext["replyContext"],
+  ) =>
+    slack.send(
+      { address, parts },
+      {
+        idempotencyKey: "reply:native",
+        replyContext,
+        signal: new AbortController().signal,
+      },
+    );
+  return { ...api, slack, send };
+}
 
 describe("slack channel end to end", () => {
   it("answers 503 before start", async () => {
@@ -548,6 +596,198 @@ describe("slack channel end to end", () => {
     const update = calls.find(({ method }) => method === "chat.update");
     expect(update?.body).toMatchObject({ text: "Stopped after 1 step" });
     await harness.close(context);
+  });
+});
+
+describe("slack block kit", () => {
+  it("declares the format and preserves text-only posts", async () => {
+    const { slack, calls, send } = await direct();
+    expect(slack.formats).toEqual(["slack.block-kit"]);
+    await send([{ type: "text", text: "Deployment completed." }]);
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        markdown_text: "Deployment completed.",
+      },
+    ]);
+  });
+
+  it("posts native blocks, fallback text, and thread arguments", async () => {
+    const { calls, send } = await direct();
+    await send([represented("Deployment completed.")]);
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        text: "Deployment completed.",
+        blocks: [nativeBlock],
+      },
+    ]);
+  });
+
+  it("retains plain and represented parts in order", async () => {
+    const { calls, send } = await direct();
+    await send([
+      represented("First."),
+      { type: "text", text: "Second." },
+      represented("Third."),
+    ]);
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        text: "First.Second.Third.",
+        blocks: [
+          nativeBlock,
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Second." },
+          },
+          nativeBlock,
+        ],
+      },
+    ]);
+  });
+
+  it("uses Markdown for unknown formats", async () => {
+    const { calls, send } = await direct();
+    await send([
+      {
+        type: "text",
+        text: "Readable fallback.",
+        representations: { "test.other": { blocks: [nativeBlock] } },
+      },
+      represented("Native part."),
+    ]);
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        markdown_text: "Readable fallback.Native part.",
+      },
+    ]);
+  });
+
+  it("uses Markdown for a malformed representation", async () => {
+    const { calls, send } = await direct();
+    await send([
+      {
+        type: "text",
+        text: "Readable fallback.",
+        representations: { "slack.block-kit": { blocks: "invalid" } },
+      },
+    ]);
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        markdown_text: "Readable fallback.",
+      },
+    ]);
+  });
+
+  it("posts nothing for empty text with a representation", async () => {
+    const { calls, send } = await direct();
+    await send([represented("")]);
+    expect(posts(calls)).toEqual([]);
+    expect(
+      calls.find(({ method }) => method === "agents.sessions.setStatus")?.body,
+    ).toEqual({
+      channel_id: "D1",
+      thread_ts: "200.000100",
+      status: "active",
+    });
+  });
+
+  it.each(["invalid_blocks", "invalid_blocks_format", "msg_blocks_too_long"])(
+    "posts Markdown after Slack rejects content with %s",
+    async (error) => {
+      const { calls, send } = await direct({ fake: { postErrors: [error] } });
+      await send([represented("Deployment completed.")]);
+      expect(posts(calls)).toEqual([
+        {
+          channel: "D1",
+          thread_ts: "200.000100",
+          text: "Deployment completed.",
+          blocks: [nativeBlock],
+        },
+        {
+          channel: "D1",
+          thread_ts: "200.000100",
+          markdown_text: "Deployment completed.",
+        },
+      ]);
+    },
+  );
+
+  it.each([
+    ["Slack error", { postErrors: ["rate_limited"] }, "failed: rate_limited"],
+    ["transport error", { postStatus: 503 }, "answered 503"],
+  ])("does not fall back after a %s", async (_, fake, error) => {
+    const { calls, send } = await direct({ fake });
+    await expect(send([represented("Deployment completed.")])).rejects.toThrow(
+      error,
+    );
+    expect(posts(calls)).toEqual([
+      {
+        channel: "D1",
+        thread_ts: "200.000100",
+        text: "Deployment completed.",
+        blocks: [nativeBlock],
+      },
+    ]);
+  });
+
+  it("creates a thread alias for a represented thread root", async () => {
+    const { send } = await direct();
+    await expect(
+      send([represented("Deployment completed.")], "C1:cus_acme"),
+    ).resolves.toEqual({
+      addressData: { threadTs: "100.000100" },
+      alias: "C1:100.000100",
+    });
+  });
+
+  it("finishes plans, activates the session, and names represented replies", async () => {
+    const { slack, calls, send } = await direct({
+      nameThread: async () => "Deployment checked",
+    });
+    const target = {
+      address: "D1:200.000100",
+      idempotencyKey: "reply:native",
+      replyContext: { user: "U1", request: "Check deployment" },
+    };
+    await slack.events?.(target, { type: "run_started" });
+    await slack.events?.(target, {
+      type: "tool_started",
+      id: "deploy-1",
+      name: "deploy",
+      args: { service: "api" },
+    });
+    await send(
+      [represented("Deployment completed.")],
+      target.address,
+      target.replyContext,
+    );
+    await until(() =>
+      calls.some(({ method }) => method === "agents.sessions.rename"),
+    );
+
+    expect(
+      calls.find(({ method }) => method === "chat.update")?.body,
+    ).toMatchObject({ text: "Done: 1 step" });
+    const statuses = calls
+      .filter(({ method }) => method === "agents.sessions.setStatus")
+      .map(({ body }) => body.status);
+    expect(statuses).toEqual(["processing", "active"]);
+    expect(
+      calls.find(({ method }) => method === "agents.sessions.rename")?.body,
+    ).toEqual({
+      channel_id: "D1",
+      thread_ts: "200.000100",
+      title: "Deployment checked",
+    });
   });
 });
 

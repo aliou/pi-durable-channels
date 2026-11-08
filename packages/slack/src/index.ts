@@ -1,4 +1,8 @@
 export {
+  SLACK_BLOCK_KIT,
+  type SlackBlockKit,
+} from "./block-kit";
+export {
   describeEvent,
   type InboundSettings,
   inboundOf,

@@ -10,6 +10,15 @@ export type SlackCall = (
   signal?: AbortSignal,
 ) => Promise<Record<string, unknown>>;
 
+export class SlackApiError extends Error {
+  constructor(
+    method: string,
+    readonly code: string,
+  ) {
+    super(`Slack ${method} failed: ${code}`);
+  }
+}
+
 export function slackApi(token: string, apiUrl: string): SlackCall {
   return async (method, body, signal) => {
     const signals = [AbortSignal.timeout(TIMEOUT_MS), signal ?? []].flat();
@@ -27,8 +36,7 @@ export function slackApi(token: string, apiUrl: string): SlackCall {
       throw new Error(`Slack ${method} answered ${response.status}`);
     const reply: unknown = await response.json();
     if (!Reply.check(reply)) throw new Error(`Slack ${method} answered badly`);
-    if (!reply.ok)
-      throw new Error(`Slack ${method} failed: ${reply.error ?? "unknown"}`);
+    if (!reply.ok) throw new SlackApiError(method, reply.error ?? "unknown");
     return reply;
   };
 }

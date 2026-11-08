@@ -28,6 +28,8 @@ export type FakeSlack = {
 
 export type FakeOptions = {
   refuse?: string[];
+  postErrors?: string[];
+  postStatus?: number;
   hello?: boolean;
   dropAfterMs?: number;
   holdFiles?: Promise<void>;
@@ -108,9 +110,18 @@ export async function fakeSlack(
       const method = path.replace(/^\/api\//, "");
       const body = JSON.parse(Buffer.concat(chunks).toString());
       calls.push({ method, token, body });
-      const answer = options.refuse?.includes(method)
-        ? { ok: false, error: "invalid_auth" }
-        : reply(method, request.headers.host ?? "", ts);
+      if (method === "chat.postMessage" && options.postStatus !== undefined) {
+        response.writeHead(options.postStatus);
+        response.end();
+        return;
+      }
+      const postError =
+        method === "chat.postMessage" ? options.postErrors?.shift() : undefined;
+      const answer = postError
+        ? { ok: false, error: postError }
+        : options.refuse?.includes(method)
+          ? { ok: false, error: "invalid_auth" }
+          : reply(method, request.headers.host ?? "", ts);
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(answer));
     });

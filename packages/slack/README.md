@@ -127,6 +127,33 @@ send(reply, ctx) (reply.ts)
   as `skipped`, with a one-line description. Failed status, plan, naming, and Socket Mode calls arrive as
   `adapter_error`, with the thread's address when there is one.
 
+## Block Kit replies
+
+The adapter declares `SLACK_BLOCK_KIT` (`slack.block-kit`) and exports the `SlackBlockKit` representation type. Supply native Block Kit alongside required readable fallback text on an outbound part:
+
+```ts
+const part: OutboundPart = {
+  type: "text",
+  text: "Deployment completed for api.",
+  representations: {
+    [SLACK_BLOCK_KIT]: {
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "*Deployment completed* for api." },
+        },
+      ],
+    },
+  },
+};
+```
+
+A represented reply uses `chat.postMessage` with top-level `text` and `blocks`. Text-only replies retain the `markdown_text` payload. In a mixed reply, the adapter appends the supplied blocks in part order and converts each plain-text part to a `mrkdwn` section so every part stays visible. Unknown formats and malformed Block Kit envelopes use the complete Markdown message instead.
+
+If Slack answers `invalid_blocks`, `invalid_blocks_format`, or `msg_blocks_too_long`, the adapter posts the complete Markdown message once. Other API, transport, timeout, and abort errors still throw for durable retries. These rules preserve the original send idempotency key and never post fallback content after an ambiguous transport failure.
+
+Block Kit delivery is display-only. The adapter does not admit `block_actions` or other interaction events, and the core final-reply and `send_message` producers remain text-only.
+
 ## Tests
 
 `src/` holds the adapter with its tests colocated: event mapping, signature checks, and address parsing (`events.test.ts`), file downloads

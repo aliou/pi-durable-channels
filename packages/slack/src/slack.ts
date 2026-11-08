@@ -1,6 +1,7 @@
 import type { AdapterStart, ChannelAdapter } from "@aliou/pi-durable-channels";
 import { compile, obj, str } from "@earendil-works/pi-schema";
 import { slackApi } from "./api";
+import { SLACK_BLOCK_KIT } from "./block-kit";
 import {
   describeEvent,
   inboundOf,
@@ -89,6 +90,7 @@ export function slackChannel(options: SlackOptions): ChannelAdapter {
   }
 
   return {
+    formats: [SLACK_BLOCK_KIT],
     start: async (ctx) => {
       report = ctx.report;
       const auth = await call("auth.test", {}, ctx.signal);
