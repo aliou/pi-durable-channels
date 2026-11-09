@@ -7,6 +7,7 @@ import type {
   ChannelAdapter,
   OutboundMessage,
 } from "@aliou/pi-durable-channels";
+import { SLACK_BLOCK_KIT } from "@aliou/pi-durable-channels-slack";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
   createModels,
@@ -34,6 +35,7 @@ import {
 } from "@examples/github-channel/test/fake-github";
 import { afterEach, describe, expect, it } from "vitest";
 import { softwareFactory } from "./factory";
+import { factoryReplies } from "./replies";
 import { createWorkspace } from "./workspace";
 
 const exec = promisify(execFile);
@@ -105,7 +107,7 @@ async function open() {
   });
   await workspace.prepare();
   const factory = softwareFactory({
-    slack,
+    slack: factoryReplies(slack, "acme/app"),
     github,
     call: githubApi(async () => "ghp-test", api.apiUrl),
     repo: { owner: "acme", name: "app", base: "main" },
@@ -180,6 +182,27 @@ describe("software factory", () => {
     });
     expect(textOf(slackPosts[0])).toBe(
       "Opened https://github.com/acme/app/pull/7",
+    );
+    expect(slackPosts[0]?.parts[0]?.representations?.[SLACK_BLOCK_KIT]).toEqual(
+      {
+        blocks: [
+          {
+            type: "header",
+            text: { type: "plain_text", text: "Software factory" },
+          },
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "Opened https://github.com/acme/app/pull/7",
+            },
+          },
+          {
+            type: "context",
+            elements: [{ type: "mrkdwn", text: "Repository: acme/app" }],
+          },
+        ],
+      },
     );
 
     await github(

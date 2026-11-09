@@ -16,6 +16,7 @@ import { loadModel } from "@examples/shared/model";
 import { adapterRoute, run } from "@examples/shared/run";
 import { softwareFactory } from "./src/factory";
 import { threadNamer } from "./src/naming";
+import { factoryReplies } from "./src/replies";
 import { createWorkspace } from "./src/workspace";
 
 const env = process.env;
@@ -92,7 +93,7 @@ const slack = slackChannel({
 });
 const github = githubChannel({ auth, webhookSecret });
 const factory = softwareFactory({
-  slack: logged("slack", slack),
+  slack: logged("slack", factoryReplies(slack, `${owner}/${name}`)),
   github: logged("github", github),
   observers: [activityLog],
   onReport: logReport,

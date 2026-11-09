@@ -29,6 +29,7 @@ GitHub webhook → github channel
 - **One conversation, two channels.** The Slack thread and the pull request share a conversation, so the agent keeps
   the request, its work, and the review in one context. It answers each message on the channel it came from and can
   reach the thread with `send_message`.
+- **Native Slack replies.** `factoryReplies` adds Block Kit with a Software factory header, the agent's answer, and repository context. The answer remains the required text fallback, and Slack content rejections fall back to Markdown through the channel adapter.
 - **Tokens stay in the host.** The agent's tools never see the GitHub token or the app's private key. Pushes run in the host with a credential
   helper that gives the token only to the remote's host, and with git hooks off. The entry point removes the Slack and
   GitHub secrets from `process.env` before tools run, so `bash` does not inherit them.
@@ -46,7 +47,7 @@ GitHub webhook → github channel
 
 ## Try it
 
-1. Set up a Slack app as the [Slack channel README](../../channels/slack/README.md#slack-app-setup) describes.
+1. Set up a Slack app as the [Slack channel README](../../../packages/slack/README.md#slack-app-setup) describes.
 2. Set up GitHub auth and a webhook as the [GitHub channel README](../../channels/github/README.md#setup) describes;
    the factory pushes, so the app needs Contents read/write. Point the webhook at `/github/webhook`; for a local run,
    forward it with a tunnel or `gh webhook forward`.
