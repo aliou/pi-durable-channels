@@ -1,5 +1,12 @@
 # @aliou/pi-durable-channels
 
+## 0.3.0
+
+### Minor Changes
+
+- 0d37f0e: Export the binding-read helpers channel packages need to build conversation-scoped tools: `ChannelsDoc`, `ChannelsState`, `Binding`, `findBinding`, and `conversationAddresses`.
+- 94aede0: Allow outbound text parts to carry JSON representations keyed by format, and let channel adapters declare the formats they can render.
+
 ## 0.2.0
 
 ### Minor Changes

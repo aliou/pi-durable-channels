@@ -1,6 +1,6 @@
 {
   "name": "@aliou/pi-durable-channels-slack",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Slack channel adapter for pi-durable channels",
   "license": "MIT",
   "type": "module",
