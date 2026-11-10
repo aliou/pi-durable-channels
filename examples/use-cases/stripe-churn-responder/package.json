@@ -11,8 +11,8 @@
   "dependencies": {
     "@aliou/pi-durable-channels": "workspace:*",
     "@aliou/pi-durable-channels-slack": "workspace:*",
-    "@earendil-works/pi-durable": "1.5.0",
-    "@earendil-works/pi-schema": "1.5.0",
+    "@earendil-works/pi-durable": "1.5.1",
+    "@earendil-works/pi-schema": "1.5.1",
     "@examples/shared": "workspace:*",
     "stripe": "^23.1.0"
   },

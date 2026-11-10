@@ -1,4 +1,4 @@
-import { copyJson, type JsonValue } from "@earendil-works/chord";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
 import {
   AgentDoc,
   type ConversationId,

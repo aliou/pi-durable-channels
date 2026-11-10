@@ -1,5 +1,5 @@
 import type { OutboundMessage } from "@aliou/pi-durable-channels";
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import {
   arr,
   compile,

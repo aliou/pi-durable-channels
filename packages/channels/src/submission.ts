@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { SubmissionDraft, UserInput } from "@earendil-works/pi-durable";
 import { ChannelMessage, type ChannelMessageData, ChannelNote } from "./doc";
 import type { AddressKey, DeliverOptions, InboundMessage } from "./types";

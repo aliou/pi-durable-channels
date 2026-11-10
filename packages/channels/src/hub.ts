@@ -1,5 +1,5 @@
-import { copyJson } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { copyJson } from "@earendil-works/chord/json";
 import {
   type Conversation,
   type ConversationId,

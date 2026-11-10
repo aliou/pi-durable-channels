@@ -1,4 +1,4 @@
-import type { JsonValue } from "@earendil-works/chord";
+import type { JsonValue } from "@earendil-works/chord/json";
 import { compile, obj, str } from "@earendil-works/pi-schema";
 
 const THREAD_TS = /^\d+\.\d+$/;

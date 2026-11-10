@@ -1,4 +1,4 @@
-import { copyJson, type JsonValue } from "@earendil-works/chord";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
 import type { ConversationId, Tx } from "@earendil-works/pi-durable";
 import { defineTask } from "@earendil-works/pi-durable";
 import { ChannelsDoc, findBinding, setBinding } from "./doc";
