@@ -27,6 +27,28 @@ describe("github events", () => {
     ).toEqual([]);
   });
 
+  it("opens human pull requests", () => {
+    expect(event("pull_request", payloads.pullOpened(7))).toEqual([
+      {
+        message: {
+          address: "acme/app#7",
+          text: "Pull request #7 opened by @ana: Fix save\nhttps://github.com/acme/app/pull/7\nSaves return 2.",
+          requestId: "github:d1",
+          author: "ana",
+          event: "pull_request.opened",
+          replyContext: { reactions: "/repos/acme/app/issues/7/reactions" },
+        },
+        options: {},
+      },
+    ]);
+    expect(
+      event("pull_request", { ...payloads.pullOpened(7), action: "closed" }),
+    ).toEqual([]);
+    const opened = payloads.pullOpened(7);
+    opened.pull_request.user.type = "Bot";
+    expect(event("pull_request", opened)).toEqual([]);
+  });
+
   it("runs on comments and reviews, and leaves line comments to their review", () => {
     expect(event("issue_comment", payloads.comment(7, "why?"))).toMatchObject([
       {

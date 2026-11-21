@@ -1,4 +1,8 @@
-import type { BindTarget } from "@aliou/pi-durable-channels";
+import {
+  type BindTarget,
+  ChannelsDoc,
+  conversationAddresses,
+} from "@aliou/pi-durable-channels";
 import {
   type ConversationId,
   defineExtension,
@@ -6,7 +10,11 @@ import {
   type Tx,
 } from "@earendil-works/pi-durable";
 import { arr, compile, int, obj, str } from "@earendil-works/pi-schema";
-import { type GitHubCall, issueAddress } from "@examples/github-channel";
+import {
+  type GitHubCall,
+  issueAddress,
+  parseIssueAddress,
+} from "@examples/github-channel";
 import type { Workspace } from "./workspace";
 
 export type Repo = { owner: string; name: string; base: string };
@@ -86,15 +94,22 @@ export function triageTools(options: {
   const { call, repo, labels } = options;
   const labelIssue = defineTool({
     name: "label_issue",
-    description: `Add labels to an issue of ${repo.owner}/${repo.name}. Allowed labels: ${labels.join(", ")}`,
-    parameters: obj({ issue: int(), labels: arr(str()) }),
-    execute: async ({ issue, labels: added }) => {
+    description: `Add labels to this conversation's issue or pull request in ${repo.owner}/${repo.name}. Allowed labels: ${labels.join(", ")}`,
+    parameters: obj({ labels: arr(str()) }),
+    execute: async ({ labels: added }, api, context) => {
       const unknown = added.filter((label) => !labels.includes(label));
       if (unknown.length > 0)
         return text(`Not allowed: ${unknown.join(", ")}`, true);
-      const path = `/repos/${repo.owner}/${repo.name}/issues/${issue}/labels`;
+      const state = await api.snapshot(ChannelsDoc, context);
+      const addresses = conversationAddresses(state, api.conversationId)
+        .filter(({ channel }) => channel === "github")
+        .map(({ address }) => parseIssueAddress(address));
+      if (addresses.length !== 1)
+        return text("This conversation has no single GitHub issue.", true);
+      const [{ owner, repo: name, number }] = addresses;
+      const path = `/repos/${owner}/${name}/issues/${number}/labels`;
       await call("POST", path, { labels: added });
-      return text(`Labeled #${issue}: ${added.join(", ")}`);
+      return text(`Labeled #${number}: ${added.join(", ")}`);
     },
   });
   return defineExtension({ name: "factory-triage", tools: [labelIssue] });

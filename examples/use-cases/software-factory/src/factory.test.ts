@@ -92,6 +92,11 @@ async function open() {
   const slack: ChannelAdapter = {
     send: async (message) => {
       slackPosts.push(message);
+      if (message.address.startsWith("C_ALERT:"))
+        return {
+          addressData: { threadTs: "200.000200" },
+          alias: "C_ALERT:200.000200",
+        };
     },
   };
   const github = githubChannel({
@@ -113,7 +118,8 @@ async function open() {
     repo: { owner: "acme", name: "app", base: "main" },
     workspace,
     model: { provider: "faux", modelId: "faux-1" },
-    instructions: { build: "build", triage: "triage" },
+    instructions: "role\nbuild\ntriage\nreview",
+    slackAlertChannel: "C_ALERT",
     labels: ["bug", "cannot-reproduce"],
   });
   const faux = fauxProvider();
@@ -217,18 +223,45 @@ describe("software factory", () => {
       },
     ]);
     expect(slackPosts).toHaveLength(1);
+    await hub.stop();
     await harness.close(context);
   });
 
-  it("triages a new issue in its own worktree and labels it", async () => {
-    const { faux, harness, github, calls } = await open();
+  it("triages a new issue, alerts Slack once, and binds the alert thread", async () => {
+    const { faux, harness, hub, github, slackPosts, calls } = await open();
     faux.setResponses([
       turn("bash", { command: "cat save.ts" }),
-      turn("label_issue", { issue: 3, labels: ["cannot-reproduce"] }),
+      turn("label_issue", { labels: ["cannot-reproduce"] }),
       fauxAssistantMessage("Could not reproduce: save returns 1."),
+      fauxAssistantMessage("Seen in the alert thread."),
     ]);
-    await github(webhook("issues", payloads.issueOpened(3)));
+    const delivered = webhook("issues", payloads.issueOpened(3), {
+      delivery: "issue-3-opened",
+    });
+    await github(delivered);
     await harness.waitForIdle(context);
+    expect(slackPosts).toHaveLength(1);
+    expect(slackPosts[0]?.address).toBe("C_ALERT:acme/app#3");
+    expect(textOf(slackPosts[0])).toContain("Issue #3 opened by @ana");
+
+    await github(
+      webhook("issues", payloads.issueOpened(3), {
+        delivery: "issue-3-opened",
+      }),
+    );
+    await harness.waitForIdle(context);
+    expect(slackPosts).toHaveLength(1);
+
+    await hub.deliver("slack", {
+      address: "C_ALERT:200.000200",
+      text: "<@UBOT> are you there?",
+      requestId: "slack:C_ALERT:200.000200",
+      author: "U1",
+    });
+    await harness.waitForIdle(context);
+    expect(slackPosts[1]?.address).toBe("C_ALERT:200.000200");
+    expect(textOf(slackPosts[1])).toBe("Seen in the alert thread.");
+
     const posts = calls.filter(
       ({ method, path }) => method === "POST" && !path.endsWith("/reactions"),
     );
@@ -242,6 +275,50 @@ describe("software factory", () => {
         body: { body: "Could not reproduce: save returns 1." },
       }),
     ]);
+    await hub.stop();
+    await harness.close(context);
+  });
+
+  it("opens a conversation for a human pull request and follows comments", async () => {
+    const { faux, harness, hub, github, slackPosts, calls } = await open();
+    faux.setResponses([
+      fauxAssistantMessage("Reviewed the new pull request."),
+      fauxAssistantMessage("Addressed the comment."),
+    ]);
+    await github(webhook("pull_request", payloads.pullOpened(7)));
+    await github(webhook("issue_comment", payloads.comment(7, "rename this")));
+    await harness.waitForIdle(context);
+    expect(slackPosts).toHaveLength(1);
+    expect(slackPosts[0]?.address).toBe("C_ALERT:acme/app#7");
+    expect(comments(calls)).toEqual([
+      {
+        path: "/repos/acme/app/issues/7/comments",
+        body: { body: "Reviewed the new pull request." },
+      },
+      {
+        path: "/repos/acme/app/issues/7/comments",
+        body: { body: "Addressed the comment." },
+      },
+    ]);
+    await hub.stop();
+    await harness.close(context);
+  });
+
+  it("refuses to label from a conversation without a GitHub issue", async () => {
+    const { faux, harness, hub, calls } = await open();
+    faux.setResponses([
+      turn("label_issue", { labels: ["bug"] }),
+      fauxAssistantMessage("There is no issue to label."),
+    ]);
+    await hub.deliver("slack", {
+      address: "C1:100.000100",
+      text: "<@UBOT> label issue 99",
+      requestId: "slack:C1:100.000100",
+      author: "U1",
+    });
+    await harness.waitForIdle(context);
+    expect(calls.some(({ path }) => path.endsWith("/labels"))).toBe(false);
+    await hub.stop();
     await harness.close(context);
   });
 });

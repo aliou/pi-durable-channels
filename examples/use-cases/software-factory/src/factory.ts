@@ -22,7 +22,8 @@ export type FactoryOptions = {
   repo: Repo;
   workspace: Workspace;
   model: ModelRef;
-  instructions: { build: string; triage: string };
+  instructions: string;
+  slackAlertChannel: string;
   labels: readonly string[];
   observers?: readonly Extension[];
   onReport?: ChannelsOptions["onReport"];
@@ -48,14 +49,34 @@ export function softwareFactory(options: FactoryOptions): Factory {
     channels: {
       slack: {
         adapter: options.slack,
-        conversation: () => ({ agent: personas.build }),
+        conversation: () => ({ agent }),
       },
       github: {
         adapter: options.github,
-        conversation: (message) =>
-          message.event === "issues.opened"
-            ? { agent: personas.triage }
-            : undefined,
+        conversation: (message) => {
+          if (
+            message.event !== "issues.opened" &&
+            message.event !== "pull_request.opened"
+          )
+            return undefined;
+          const address = `${options.slackAlertChannel}:${message.address}`;
+          return {
+            agent,
+            init: async (tx, conversationId) => {
+              await channels.bind(
+                tx,
+                { channel: "slack", address },
+                conversationId,
+              );
+              await channels.send(tx, conversationId, {
+                channel: "slack",
+                address,
+                text: message.text,
+                idempotencyKey: `alert:${message.requestId}`,
+              });
+            },
+          };
+        },
       },
     },
     onReport: options.onReport,
@@ -67,23 +88,17 @@ export function softwareFactory(options: FactoryOptions): Factory {
     bind: channels.bind,
   });
   const triage = triageTools({ call, repo, labels: options.labels });
-  const personas = {
-    build: {
-      model,
-      instructions: options.instructions.build,
-      extensions: [
-        CodingTools,
-        WorkspacePrompt,
-        channels.tools,
-        build,
-        ...observers,
-      ],
-    },
-    triage: {
-      model,
-      instructions: options.instructions.triage,
-      extensions: [CodingTools, WorkspacePrompt, triage, ...observers],
-    },
+  const agent = {
+    model,
+    instructions: options.instructions,
+    extensions: [
+      CodingTools,
+      WorkspacePrompt,
+      channels.tools,
+      build,
+      triage,
+      ...observers,
+    ],
   };
   return {
     channels,

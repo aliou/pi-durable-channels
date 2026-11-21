@@ -5,8 +5,8 @@ import {
   section,
 } from "@earendil-works/pi-durable";
 import { obj, str } from "@earendil-works/pi-schema";
+import type { Send } from "./core";
 import { ChannelsDoc, conversationAddresses, findBinding } from "./doc";
-import type { SendTask } from "./send";
 
 export const TOOLS_EXTENSION = "channels-tools";
 
@@ -16,7 +16,7 @@ function text(value: string, isError = false) {
   return { output: [{ type: "text" as const, text: value }], isError };
 }
 
-export function defineChannelTools(Send: SendTask): Extension {
+export function defineChannelTools(send: Send): Extension {
   const sendMessage = defineTool({
     name: "send_message",
     description:
@@ -27,19 +27,17 @@ export function defineChannelTools(Send: SendTask): Extension {
       const binding = findBinding(state, { channel, address });
       if (binding?.conversationId !== api.conversationId)
         return text(`Unknown address ${address} on channel ${channel}.`, true);
-      const input = {
-        channel,
-        address,
-        parts: [{ type: "text" as const, text: body }],
-        idempotencyKey: `notify:${api.taskId}`,
-        ...(binding.addressData === undefined
-          ? {}
-          : { addressData: binding.addressData }),
-      };
-      await api.createTask(
-        Send,
-        input,
-        { ownership: { kind: "conversation" }, background: true },
+      await api.commit(
+        (tx) =>
+          send(tx, api.conversationId, {
+            channel,
+            address,
+            text: body,
+            idempotencyKey: `notify:${api.taskId}`,
+            ...(binding.addressData === undefined
+              ? {}
+              : { addressData: binding.addressData }),
+          }),
         context,
       );
       return text(`Message queued for ${address} on ${channel}.`);

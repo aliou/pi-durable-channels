@@ -37,6 +37,7 @@ github.fetch(request)
   no X-GitHub-Delivery or no JSON → 400
   inboundOf({ name: X-GitHub-Event, delivery, payload }) (events.ts)
     issues.opened                       → run, event "issues.opened", replyContext { reactions: the issue's }
+    pull_request.opened                 → run, event "pull_request.opened", replyContext { reactions: the issue's }
     issue_comment.created               → run, replyContext { reactions: the comment's }
     pull_request_review.submitted       → run, with the review's line comments fetched and listed after its body
                                           (GET /repos/<owner>/<repo>/pulls/<n>/comments, those of this review)

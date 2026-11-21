@@ -28,6 +28,7 @@ function secret(name: string): string | undefined {
 }
 
 const botToken = secret("SLACK_BOT_TOKEN");
+const slackAlertChannel = env.SLACK_ALERT_CHANNEL_ID;
 const appToken = secret("SLACK_APP_TOKEN");
 const signingSecret = secret("SLACK_SIGNING_SECRET");
 const token = secret("GITHUB_TOKEN");
@@ -53,18 +54,28 @@ function slackTransport() {
 
 const transport = slackTransport();
 const auth = await githubAuth();
-if (!botToken || !transport || !auth || !webhookSecret || !owner || !name) {
+if (
+  !botToken ||
+  !slackAlertChannel ||
+  !transport ||
+  !auth ||
+  !webhookSecret ||
+  !owner ||
+  !name
+) {
   throw new Error(
-    "Set SLACK_BOT_TOKEN, SLACK_APP_TOKEN or SLACK_SIGNING_SECRET, GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, and GITHUB_REPO (see .env.example)",
+    "Set SLACK_BOT_TOKEN, SLACK_ALERT_CHANNEL_ID, SLACK_APP_TOKEN or SLACK_SIGNING_SECRET, GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH or GITHUB_TOKEN, GITHUB_WEBHOOK_SECRET, and GITHUB_REPO (see .env.example)",
   );
 }
 
 const base = env.BASE_BRANCH || "main";
 const repo = { owner, name, base };
-const instructions = async (file: string) => {
-  const text = await readFile(new URL(file, import.meta.url), "utf8");
-  return `${text}\nRepository: ${owner}/${name}, base branch ${base}.`;
-};
+const sections = await Promise.all(
+  ["role.md", "build.md", "triage.md", "review.md"].map((file) =>
+    readFile(new URL(`instructions/${file}`, import.meta.url), "utf8"),
+  ),
+);
+const instructions = `${sections.join("\n")}\nRepository: ${owner}/${name}, base branch ${base}.`;
 
 const workspace = createWorkspace({
   root: join(env.DATA_DIR ?? join("tmp", "software-factory"), "workspace"),
@@ -101,10 +112,8 @@ const factory = softwareFactory({
   repo,
   workspace,
   model,
-  instructions: {
-    build: await instructions("build.md"),
-    triage: await instructions("triage.md"),
-  },
+  instructions,
+  slackAlertChannel,
   labels: (env.TRIAGE_LABELS ?? "bug,cannot-reproduce,needs-info,question")
     .split(",")
     .map((label) => label.trim())

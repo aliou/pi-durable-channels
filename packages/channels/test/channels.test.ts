@@ -526,6 +526,41 @@ describe("send failures and recovery", () => {
     await second.harness.close(context);
   });
 
+  it("recovers a host send with its original idempotency key", async () => {
+    const storage = await sqliteStorage();
+    const test = setup();
+    test.adapter.hold = true;
+    const opened = await storage();
+    const crashing = killable(opened);
+    const first = await test.open(crashing.storage);
+    await first.harness.commit(async (tx) => {
+      const conversation = await tx.createConversation({
+        ownership: { kind: "ownerless" },
+      });
+      await test.channels.send(tx, conversation.id, {
+        channel: "web",
+        address: "thread-1",
+        text: "New work started.",
+        idempotencyKey: "alert:github:d1",
+      });
+    }, context);
+    first.harness.resume();
+    await eventually(() => test.adapter.sent.length === 1);
+    crashing.kill();
+
+    test.adapter.hold = false;
+    const reopened = await storage();
+    const second = await test.open(reopened);
+    second.harness.resume();
+    await eventually(() => test.adapter.sent.length === 2);
+    expect(test.adapter.sent.map(({ ctx }) => ctx.idempotencyKey)).toEqual([
+      "alert:github:d1",
+      "alert:github:d1",
+    ]);
+    await second.hub.stop();
+    await second.harness.close(context);
+  });
+
   it("retries a failed send with the same idempotency key", async () => {
     const test = setup();
     test.adapter.failures = 2;

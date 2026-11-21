@@ -40,6 +40,26 @@ const IssueOpened = compile(
   ),
 );
 
+const PullRequestOpened = compile(
+  obj(
+    {
+      action: lit("opened"),
+      pull_request: obj(
+        {
+          number: int(),
+          title: str(),
+          body: Text,
+          html_url: str(),
+          user: User,
+        },
+        { open: true },
+      ),
+      repository: Repository,
+    },
+    { open: true },
+  ),
+);
+
 const IssueComment = compile(
   obj(
     {
@@ -136,6 +156,28 @@ const issues: Handler = (payload, { requestId, self }) => {
   return [{ message, options: {} }];
 };
 
+const pullRequest: Handler = (payload, { requestId, self }) => {
+  if (!PullRequestOpened.check(payload)) return [];
+  const { pull_request: pull } = payload;
+  if (!human(pull.user, self)) return [];
+  const repository = payload.repository.full_name;
+  const message = {
+    address: issueAddress(repository, pull.number),
+    text: lines(
+      `Pull request #${pull.number} opened by @${pull.user.login}: ${pull.title}`,
+      pull.html_url,
+      pull.body,
+    ),
+    requestId,
+    author: pull.user.login,
+    event: "pull_request.opened",
+    replyContext: {
+      reactions: `/repos/${repository}/issues/${pull.number}/reactions`,
+    },
+  };
+  return [{ message, options: {} }];
+};
+
 const issueComment: Handler = (payload, { requestId, self }) => {
   if (!IssueComment.check(payload)) return [];
   const { issue, comment } = payload;
@@ -203,6 +245,7 @@ const workflowRun: Handler = (payload, { requestId }) => {
 const HANDLERS: Readonly<Record<string, Handler>> = {
   issues,
   issue_comment: issueComment,
+  pull_request: pullRequest,
   pull_request_review: review,
   workflow_run: workflowRun,
 };

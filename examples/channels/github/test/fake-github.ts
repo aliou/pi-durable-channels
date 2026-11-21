@@ -99,6 +99,17 @@ export const payloads = {
     },
     repository,
   }),
+  pullOpened: (number: number, title = "Fix save") => ({
+    action: "opened",
+    pull_request: {
+      number,
+      title,
+      body: "Saves return 2.",
+      html_url: `https://github.com/acme/app/pull/${number}`,
+      user: user("ana"),
+    },
+    repository,
+  }),
   comment: (number: number, body: string, login = "ana") => ({
     action: "created",
     issue: { number, pull_request: {} },

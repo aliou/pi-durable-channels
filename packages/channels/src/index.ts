@@ -1,5 +1,10 @@
 export type { BindTarget } from "./bind";
-export { type Channels, createChannels } from "./core";
+export {
+  type ChannelSend,
+  type Channels,
+  createChannels,
+  type Send,
+} from "./core";
 export {
   type Binding,
   ChannelsDoc,

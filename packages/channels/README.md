@@ -66,7 +66,9 @@ It prints `Hello from pi-durable.`. For crash recovery, use a persistent pi-dura
 
 ## Host registration
 
-`createChannels(options)` returns `extension`, `tools`, transactional `bind`, and a `hub` factory. Install `channels.extension` in the Harness registry for durable sends and reply hooks. Install `channels.tools` when the agent needs messaging tools and the address prompt section.
+`createChannels(options)` returns `extension`, `tools`, transactional `bind` and `send`, and a `hub` factory. Install `channels.extension` in the Harness registry for durable sends and reply hooks. Install `channels.tools` when the agent needs messaging tools and the address prompt section.
+
+`channels.send(tx, conversationId, { channel, address, text, idempotencyKey })` enqueues a background durable send in the caller's transaction. Use it for host-originated notifications, including conversation initialization. The task retains the idempotency key across retries and recovery. Bind the address in the same transaction when the conversation should later accept replies from it.
 
 A channel is a host-assigned name, not an agent persona. Its optional `conversation(message, { channel })` factory creates a conversation for an unknown address. Returning `undefined` ignores the message. Without a factory, only bound addresses accept messages. `message.event` can select an agent, but is not stored in the channel entry.
 

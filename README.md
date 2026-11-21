@@ -22,7 +22,7 @@ Example adapters:
 Runnable agents:
 
 - [Generic webhook agent](examples/use-cases/generic-webhook-agent/README.md): triage incoming alerts and page when they need attention.
-- [Software factory](examples/use-cases/software-factory/README.md): turn Slack requests into pull requests and triage GitHub issues.
+- [Software factory](examples/use-cases/software-factory/README.md): turn Slack requests into pull requests, triage GitHub issues, and connect new GitHub work to Slack alert threads.
 - [Stripe churn responder](examples/use-cases/stripe-churn-responder/README.md): handle churn signals in per-customer Slack threads.
 
 ## Development

@@ -1,3 +1,4 @@
+import type { JsonValue } from "@earendil-works/chord/json";
 import type { Tx } from "@earendil-works/pi-durable";
 import {
   type ConversationId,
@@ -17,6 +18,20 @@ import type { ChannelRegistration, ChannelsOptions } from "./types";
 
 const DEFAULT_RETRY = { attempts: 5, baseDelayMs: 1000 };
 
+export type ChannelSend = {
+  channel: string;
+  address: string;
+  text: string;
+  idempotencyKey: string;
+  addressData?: JsonValue;
+};
+
+export type Send = (
+  tx: Tx,
+  conversationId: ConversationId,
+  input: ChannelSend,
+) => Promise<void>;
+
 export type Channels = {
   extension: Extension;
   tools: Extension;
@@ -25,6 +40,7 @@ export type Channels = {
     target: BindTarget,
     conversationId: ConversationId,
   ): Promise<void>;
+  send: Send;
   hub(harness: Harness, options?: HubOptions): ChannelsHub;
 };
 
@@ -44,6 +60,26 @@ export function createChannels(options: ChannelsOptions): Channels {
     options.retry ?? DEFAULT_RETRY,
     report,
   );
+  const send: Send = async (tx, conversationId, input) => {
+    registration(input.channel);
+    await tx.createTask(
+      Send,
+      {
+        channel: input.channel,
+        address: input.address,
+        parts: [{ type: "text", text: input.text }],
+        idempotencyKey: input.idempotencyKey,
+        ...(input.addressData === undefined
+          ? {}
+          : { addressData: input.addressData }),
+      },
+      {
+        ownership: { kind: "conversation" },
+        conversationId,
+        background: true,
+      },
+    );
+  };
 
   return {
     extension: defineExtension({
@@ -51,11 +87,12 @@ export function createChannels(options: ChannelsOptions): Channels {
       tasks: [Send],
       hooks: [hook(GenerationTask, { afterRun: replyHook(Send) })],
     }),
-    tools: defineChannelTools(Send),
+    tools: defineChannelTools(send),
     bind: async (tx, target, conversationId) => {
       registration(target.channel);
       await bindAddress(tx, target, conversationId);
     },
+    send,
     hub: (harness, hubOptions) =>
       createHub(harness, {
         options,
