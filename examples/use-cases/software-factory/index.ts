@@ -95,7 +95,15 @@ const { models, model } = loadModel(
 const slack = slackChannel({
   botToken,
   transport,
-  threadMessages: "run",
+  config: (target) => ({
+    scope: "thread",
+    trigger:
+      target.conversationType === "im" || target.threadTs !== undefined
+        ? "every_message"
+        : "mention",
+    context: { maxMessages: 30, maxBytes: 30_000, maxFiles: 10 },
+    readTool: true,
+  }),
   nameThread: threadNamer(
     models,
     model,

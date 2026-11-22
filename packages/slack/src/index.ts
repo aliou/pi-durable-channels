@@ -2,14 +2,17 @@ export {
   SLACK_BLOCK_KIT,
   type SlackBlockKit,
 } from "./block-kit";
+export type {
+  SlackConfig,
+  SlackConfigTarget,
+  SlackConversationType,
+} from "./config";
 export {
   describeEvent,
-  type InboundSettings,
   inboundOf,
   renamedThreadOf,
   type SlackInbound,
   stoppedAddressOf,
-  type ThreadMessages,
 } from "./events";
 export type { NameThread } from "./naming";
 export { type SlackOptions, slackChannel } from "./slack";

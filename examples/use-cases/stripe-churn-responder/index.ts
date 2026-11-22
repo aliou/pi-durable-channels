@@ -49,7 +49,16 @@ const { models, model } = loadModel((prompt) =>
 );
 const tools = churnTools(env.STRIPE_SECRET_KEY);
 
-const slack = slackChannel({ botToken, transport });
+const slack = slackChannel({
+  botToken,
+  transport,
+  config: (target) => ({
+    scope: "thread",
+    trigger: target.conversationType === "im" ? "every_message" : "mention",
+    context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+    readTool: false,
+  }),
+});
 const cases: ChannelAdapter = {
   ...slack,
   send: async (message, ctx) => {

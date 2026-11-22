@@ -18,14 +18,20 @@ export const httpEvents = (signingSecret: string): SlackTransport => ({
   signingSecret,
 });
 
-export type OnEvent = (event: unknown) => Promise<void>;
+export type OnEvent = (envelope: {
+  teamId: string;
+  event: unknown;
+}) => Promise<void>;
 
 const Connection = compile(obj({ url: str() }, { open: true }));
 const UrlVerification = compile(
   obj({ type: lit("url_verification"), challenge: str() }, { open: true }),
 );
 const EventCallback = compile(
-  obj({ type: lit("event_callback"), event: unknown() }, { open: true }),
+  obj(
+    { type: lit("event_callback"), team_id: str(), event: unknown() },
+    { open: true },
+  ),
 );
 
 export async function receiveHttp(
@@ -40,7 +46,8 @@ export async function receiveHttp(
   const body = parseJson(raw);
   if (UrlVerification.check(body))
     return Response.json({ challenge: body.challenge });
-  if (EventCallback.check(body)) await http.onEvent(body.event);
+  if (EventCallback.check(body))
+    await http.onEvent({ teamId: body.team_id, event: body.event });
   return new Response(null, { status: 200 });
 }
 
@@ -60,7 +67,8 @@ export function listenSocket(socket: {
       return opened.url;
     },
     onPayload: async (payload) => {
-      if (EventCallback.check(payload)) await socket.onEvent(payload.event);
+      if (EventCallback.check(payload))
+        await socket.onEvent({ teamId: payload.team_id, event: payload.event });
     },
     onError: socket.onError,
     signal: socket.signal,

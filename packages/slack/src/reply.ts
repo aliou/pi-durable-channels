@@ -21,7 +21,12 @@ const CONTENT_ERRORS = new Set([
 ]);
 
 const Posted = compile(obj({ ts: str() }, { open: true }));
-const Requester = compile(obj({ user: str(), request: opt(str()) }));
+const Requester = compile(
+  obj(
+    { user: str(), request: opt(str()), threadTs: opt(str()) },
+    { open: true },
+  ),
+);
 
 function textOf(message: OutboundMessage): string {
   return message.parts
@@ -53,7 +58,11 @@ export function slackReplies(
     text: string,
     ctx: SendContext,
   ): Promise<SendResult | undefined> {
-    const { channel, threadTs } = slackTarget(message.address, ctx.addressData);
+    const { channel, threadTs } = slackTarget(
+      message.address,
+      ctx.addressData,
+      ctx.replyContext,
+    );
     const thread = threadTs === undefined ? {} : { thread_ts: threadTs };
     const blocks = blockKitBlocks(message);
     const content =
@@ -82,7 +91,12 @@ export function slackReplies(
     const sessionTs = threadTs ?? root;
     if (sessionTs !== undefined)
       await status({ channel, threadTs: sessionTs }, "active");
-    if (threadTs !== undefined || root === undefined) return undefined;
+    if (
+      threadTs !== undefined ||
+      root === undefined ||
+      !message.address.includes(":")
+    )
+      return undefined;
     return { addressData: { threadTs: root }, alias: `${channel}:${root}` };
   }
 
@@ -96,7 +110,11 @@ export function slackReplies(
     ctx: SendContext,
   ): Promise<SendResult | undefined> {
     const text = textOf(message).slice(0, MAX_TEXT);
-    const thread = threadOf({ ...message, addressData: ctx.addressData });
+    const thread = threadOf({
+      ...message,
+      addressData: ctx.addressData,
+      replyContext: ctx.replyContext,
+    });
     if (text.trim() === "") {
       await decline(thread, ctx.idempotencyKey);
       return undefined;

@@ -1,77 +1,92 @@
 import { describe, expect, it } from "vitest";
 import { message, SECRET, signed } from "../test/fake-slack";
+import type { SlackConfig } from "./config";
 import {
   describeEvent,
   inboundOf,
+  mentionsBot,
   renamedThreadOf,
+  slackMessageOf,
   stoppedAddressOf,
 } from "./events";
 import { slackTarget } from "./target";
 import { verifySlackSignature } from "./verify";
 
-const bot = { botUserId: "UBOT" };
+const config: SlackConfig = {
+  scope: "thread",
+  trigger: "mention",
+  context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+  readTool: true,
+};
+
+function parsed(fields: Record<string, unknown> = {}) {
+  const event = slackMessageOf(message(fields));
+  if (event === undefined) throw new Error("message was rejected");
+  return event;
+}
 
 describe("slack events", () => {
-  it("runs on a mention, stores other thread messages, and skips the rest", () => {
+  it("filters bot messages and unsupported subtypes", () => {
+    expect(slackMessageOf(message({ bot_id: "B1" }))).toBeUndefined();
     expect(
-      inboundOf(message({ thread_ts: "100.000100", text: "fyi" }), bot),
-    ).toEqual({
-      message: {
-        address: "C1:100.000100",
-        text: "fyi",
-        requestId: "slack:C1:200.000100",
-        author: "U1",
-        replyContext: { user: "U1", request: "fyi" },
-        files: [],
-      },
-      options: { run: false },
-    });
-    expect(inboundOf(message({ text: "<@UBOT> help" }), bot)).toMatchObject({
+      slackMessageOf(message({ subtype: "message_changed" })),
+    ).toBeUndefined();
+    expect(slackMessageOf({ type: "reaction_added" })).toBeUndefined();
+    expect(mentionsBot(parsed({ text: "<@UBOT> help" }), "UBOT")).toBe(true);
+  });
+
+  it("maps thread scope and keeps the triggering reply thread", () => {
+    expect(inboundOf(parsed({ text: "<@UBOT> help" }), config)).toEqual({
       message: {
         address: "C1:200.000100",
-        replyContext: { user: "U1", request: "<@UBOT> help" },
+        text: "<@UBOT> help",
+        requestId: "slack:C1:200.000100",
+        author: "U1",
+        replyContext: {
+          user: "U1",
+          request: "<@UBOT> help",
+          threadTs: "200.000100",
+        },
+        files: [],
       },
-      options: {},
+      options: { run: true, create: true },
     });
-    expect(inboundOf(message({}), bot)).toBeUndefined();
     expect(
-      inboundOf(message({ thread_ts: "1.1", bot_id: "B1" }), bot),
-    ).toBeUndefined();
+      inboundOf(parsed({ thread_ts: "100.000100", text: "and also" }), config),
+    ).toMatchObject({
+      message: { address: "C1:100.000100" },
+      options: { run: true, create: true },
+    });
     expect(
-      inboundOf(message({ thread_ts: "1.1", subtype: "message_changed" }), bot),
-    ).toBeUndefined();
-    expect(inboundOf({ type: "reaction_added" }, bot)).toBeUndefined();
-  });
-
-  it("runs thread messages without a mention when asked, only in threads that have a conversation", () => {
-    const reply = message({ thread_ts: "100.000100", text: "and also" });
-    expect(
-      inboundOf(reply, { ...bot, threadMessages: "run" })?.options,
+      inboundOf(parsed({ thread_ts: "100.000100" }), {
+        ...config,
+        trigger: "every_message",
+      }).options,
     ).toEqual({ run: true, create: false });
-    expect(
-      inboundOf(message({ text: "top level" }), {
-        ...bot,
-        threadMessages: "run",
-      }),
-    ).toBeUndefined();
   });
 
-  it("decodes Slack's escapes, leaving mentions alone", () => {
-    const escaped = message({
-      channel: "D1",
-      channel_type: "im",
-      text: "<@UBOT> run `a &amp;&amp; b 2&gt;&amp;1 &lt;in`",
+  it("maps conversation scope to bare roots and thread aliases", () => {
+    const shared = { ...config, scope: "conversation" as const };
+    expect(inboundOf(parsed(), shared).message).toMatchObject({
+      address: "C1",
     });
-    expect(inboundOf(escaped, bot)?.message.text).toBe(
-      "<@UBOT> run `a && b 2>&1 <in`",
-    );
+    expect(
+      inboundOf(parsed({ thread_ts: "100.000100" }), shared).message,
+    ).toMatchObject({ address: "C1:100.000100", conversationAddress: "C1" });
+    expect(
+      inboundOf(parsed({ thread_ts: "100.000100" }), {
+        ...shared,
+        trigger: "every_message",
+      }).options,
+    ).toEqual({ run: true, create: true });
   });
 
-  it("runs every direct message and passes its files on", () => {
-    const shared = message({
+  it("decodes Slack's escapes and passes files on", () => {
+    const event = parsed({
       channel: "D1",
       channel_type: "im",
       subtype: "file_share",
+      text: "<@UBOT> run `a &amp;&amp; b 2&gt;&amp;1 &lt;in`",
       files: [
         {
           id: "F1",
@@ -82,18 +97,15 @@ describe("slack events", () => {
         { id: "F2", name: "gdrive link" },
       ],
     });
-    expect(inboundOf(shared, bot)).toMatchObject({
-      message: {
-        address: "D1:200.000100",
-        files: [
-          {
-            name: "report.pdf",
-            mimeType: "application/pdf",
-            url: "https://files.slack.com/files-pri/T1-F1/report.pdf",
-          },
-        ],
-      },
-      options: {},
+    expect(inboundOf(event, config).message).toMatchObject({
+      text: "<@UBOT> run `a && b 2>&1 <in`",
+      files: [
+        {
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          url: "https://files.slack.com/files-pri/T1-F1/report.pdf",
+        },
+      ],
     });
   });
 
@@ -135,7 +147,7 @@ describe("slack events", () => {
     expect(verifySlackSignature(SECRET, new Headers(), body)).toBe(false);
   });
 
-  it("targets a thread from the address or the stored thread, else the channel", () => {
+  it("targets timestamp threads, keyed threads, and bare conversations", () => {
     expect(slackTarget("C1:100.000100", undefined)).toEqual({
       channel: "C1",
       threadTs: "100.000100",
@@ -145,6 +157,10 @@ describe("slack events", () => {
       channel: "C1",
       threadTs: "5.5",
     });
-    expect(() => slackTarget("cus_acme", undefined)).toThrow("<channel>");
+    expect(slackTarget("C1", undefined)).toEqual({ channel: "C1" });
+    expect(slackTarget("C1", undefined, { threadTs: "5.5" })).toEqual({
+      channel: "C1",
+      threadTs: "5.5",
+    });
   });
 });

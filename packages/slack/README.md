@@ -1,8 +1,6 @@
 # @aliou/pi-durable-channels-slack
 
-A Slack adapter. Messages arrive over Socket Mode or the Events API. Each thread is one conversation, in channels and
-DMs, and an agent session with Slack's "Working…" status, stop button, and title. While the agent works, its tool calls
-and its narration between them show in a folded plan ("Done: 12 steps ›"), and the answer follows as its own message.
+A Slack adapter for durable conversations. Messages arrive over Socket Mode or the Events API. Runtime configuration chooses whether a Slack thread or an entire Slack conversation shares one core conversation, which messages trigger runs, and how much Slack history the agent can read. Replies include Slack agent-session status, stop and title handling, and a folded plan of tool calls and narration.
 
 ```sh
 pnpm add @aliou/pi-durable-channels @aliou/pi-durable-channels-slack
@@ -14,118 +12,111 @@ import { httpEvents, slackChannel, socketMode } from "@aliou/pi-durable-channels
 const slack = slackChannel({
   botToken,
   transport: socketMode(appToken),
-  nameThread: async ({ request, answer }) => "Fix stale README claims", // optional, e.g. one small model call
+  config: async (target) => ({
+    scope: target.conversationType === "im" ? "conversation" : "thread",
+    trigger:
+      target.conversationType === "im" || target.threadTs !== undefined
+        ? "every_message"
+        : "mention",
+    context: { maxMessages: 30, maxBytes: 30_000, maxFiles: 10 },
+    readTool: true,
+  }),
+  nameThread: async ({ request, answer }) => "Fix stale README claims",
 });
-// or transport: httpEvents(signingSecret), and mount slack.fetch at the Event Subscriptions URL;
-// over Socket Mode the adapter has no fetch
-const channels = createChannels({ channels: { slack: { adapter: slack, conversation } } });
-await channels.hub(harness, { env }).start();
 ```
 
-Which messages start a run:
+Use `httpEvents(signingSecret)` instead of `socketMode(appToken)` for HTTP events and mount `slack.fetch` at the Event Subscriptions URL. Socket Mode adapters have no `fetch`. Register the adapter with `createChannels`, install the channel extensions, and start the hub as described in the core package README.
 
-| Where | Mentions the bot | Doesn't mention it |
-| --- | --- | --- |
-| DM, top level or in a thread | Runs | Runs |
-| Channel thread | Runs | `threadMessages: "context"` (default): stored as context. `"run"`: runs, and the agent answers or calls `no_reply`. Only threads that already have a conversation. |
-| Channel top level | Runs, and opens a thread | Skipped |
+## Runtime configuration
 
-With `threadMessages: "run"`, install `channels.tools` so the agent has `no_reply`, and tell it in its instructions when
-to stay quiet.
+`config(target)` is required and may be asynchronous. It runs for every accepted inbound message and every history-tool read. The target contains:
 
-Session titles: a new session is titled with the request, mention removed, cut to 60 characters. Slack rejects titles
-with characters such as `` ` `` `:` `/` `#` `@` `*` or a newline (`invalid_name`), so every title is cleaned first. With `nameThread`,
-the adapter asks the host for a better title after the first answer and renames the session once. A person renaming
-the session (`agent_session_title_changed`) stops that for the thread.
+- `teamId` and `teamName` from the Events API envelope and `auth.test`.
+- `conversationId`, optional `conversationName`, and `conversationType` (`channel`, `group`, `im`, or `mpim`). Slack conversations include public and private channels, DMs, and group DMs.
+- `threadTs` from the event, or from a thread address during a history read. It is `undefined` for a top-level message.
+- `userId` of the inbound author. It is `undefined` for history-tool authorization because the core history interface has no acting Slack user. Configure `readTool` at conversation level.
+
+Key application configuration by `teamId` and `conversationId`. Names are descriptive and can change; do not use them as persistence keys. Configuration failures reject inbound handling before durable admission so Slack can retry. History configuration failures become tool errors.
+
+The adapter calls `config` on the event path and does not cache its result. An application may cache configuration in memory or an external store, but must invalidate entries when configuration changes and bound stale entries. Updates to `trigger`, context limits, and `readTool` affect subsequent operations. A `scope` update affects only addresses without an exact binding; an existing Slack address never moves silently to another core conversation.
+
+Conversation metadata has a separate bounded adapter cache keyed by team and conversation ID. A metadata failure leaves `conversationName` undefined when the event supplies its type, reports the problem, and is retried on a later event.
+
+### Scope and reply routing
+
+| Scope | Slack location | Core address | `conversationAddress` |
+| --- | --- | --- | --- |
+| `thread` | Top-level message | `<conversationId>:<messageTs>` | None |
+| `thread` | Thread message | `<conversationId>:<threadTs>` | None |
+| `conversation` | Top-level message | `<conversationId>` | None |
+| `conversation` | Thread message | `<conversationId>:<threadTs>` | `<conversationId>` |
+
+Each Slack timeline has its own admission cursor, even when several timelines share durable agent state. An inbound answer and its run presentation use the triggering message as their Slack thread. Stop and title actions on a thread alias affect the shared core conversation.
+
+A proactive send to a bare conversation ID posts at top level and does not acquire a persistent reply thread. A keyed address such as `C0123:cus_acme` retains its keyed behavior: the first reply creates a thread, stores its timestamp, and binds the real Slack thread as an alias.
+
+### Triggers and history batches
+
+`trigger: "every_message"` delivers every accepted message directly. Out-of-order events still run, and their address cursor never moves backward.
+
+`trigger: "mention"` acknowledges non-mention messages without core delivery. A later mention performs one bounded `conversations.history` or `conversations.replies` read after the address cursor and before the triggering timestamp, then admits the retained history and trigger as one batch. Bot posts and unsupported subtypes are omitted. If that read fails or exceeds its short deadline, the trigger is admitted alone with a header saying earlier history was unavailable. Durable admission still precedes acknowledgement.
+
+The `context` limits apply to each history read:
+
+- `maxMessages` retains the latest messages in the window.
+- `maxBytes` bounds UTF-8 formatted history.
+- `maxFiles` bounds attachments admitted with a mention batch.
+
+The formatted batch reports omissions. A repeated or already-admitted trigger does not admit another batch.
+
+With `readTool: true` and `channels.tools` installed, the model can call `read_history` for an owned Slack address. The adapter applies the same source selection, filtering, formatting, and bounds without delivering messages or advancing the admission cursor. The core also enforces its output limit.
 
 ## Slack app setup
 
-1. Create an app and declare it as an agent (the **Agent** tab). Sessions, streaming, and the stop button need it.
-2. Bot token scopes: `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `im:history`,
-   `mpim:history`, and `files:read` for attachments.
-3. Event subscriptions (bot events): `message.channels`, `message.groups`, `message.im`, `message.mpim`,
-   `agent_session_stopped`, and `agent_session_title_changed`.
-4. Socket Mode: enable it and create an app-level token with `connections:write` (`xapp-…`). For the Events API
-   instead, set the request URL to wherever the host mounts `slack.fetch`, and use the signing secret.
+1. Create an app and declare it as an agent on the **Agent** tab. Sessions, streaming, and the stop button need it.
+2. Grant bot token scopes `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, `im:history`, `mpim:history`, `channels:read`, `groups:read`, `im:read`, and `mpim:read`. Add `files:read` for attachments.
+3. Subscribe to bot events `message.channels`, `message.groups`, `message.im`, and `message.mpim`. Add `agent_session_stopped` and `agent_session_title_changed` for stop and title handling.
+4. For Socket Mode, enable it and create an app-level token with `connections:write` (`xapp-…`). For HTTP events, set the request URL to the host's mounted `slack.fetch` route and use the signing secret.
 5. Install the app, copy the bot token (`xoxb-…`), and invite the bot to the channels it should read.
 
-## How it works
+Supplying both `appId` and `configToken` enables startup validation through `apps.manifest.export`. The configuration token needs `app_configurations:read`. Missing required message events or scopes reject startup; missing stop or title events produce a warning. Without these credentials the adapter skips manifest validation and never infers missing subscriptions from event silence.
+
+## Diagnostics
+
+`auth.test` failures reject startup. Runtime Slack permission, membership, and metadata failures reach the host's `onReport` as `adapter_error`, with the affected address when known. Errors identify the Slack method and failure code; retained OAuth scope headers are available on Slack API errors.
+
+For `missing_scope`, `not_in_channel`, and `channel_not_found`, the adapter also makes a best-effort short post in the affected Slack conversation with the required remedy. Notices are deduplicated by target, method, and issue. They are adapter-owned: they never become inbound messages, durable transcript entries, or model input, and they do not replace the agent's durable answer. A notice failure is reported separately. Missing `chat:write` cannot produce a channel notice.
+
+## Presentation and delivery
+
+A new session is titled with the request, mention removed, cut to 60 characters. Slack rejects characters such as `` ` `` `:` `/` `#` `@` `*` and newlines in titles, so titles are cleaned first. With `nameThread`, the adapter asks the host for a title after the first answer and renames the session once. A person renaming the session stops automatic naming for that thread.
 
 ```text
-hub.start → slack.start({ deliver, cancel, report, signal })
-  auth.test → the bot's user ID; failure rejects start
-  socketMode: apps.connections.open → WebSocket → resolve on hello                       (transport.ts, socket.ts)
-    refused, closed, or no hello within 10 s → reject start
-    disconnect frame: open a replacement and keep handling events until it has hello; then stop taking events,
-      terminate once the events being handled are acked
-    later drops: reconnect at once in the background, 1 s between failed attempts, failures reported as adapter_error
-  httpEvents: slack.fetch accepts requests (503 before start)
-
-hub.stop → signal aborts → each socket stops taking events and terminates once the events it is handling are acked,
-           without waiting for Slack to answer a close frame
-  events arriving after that are not acked; Slack resends them
-  failures after the abort are not reported
-  slack.stop resolves when the reconnect loop has exited
-
 inbound event
-  httpEvents: body over 1 MiB → 413; bad signature or timestamp older than 5 min → 401  (verify.ts)
-              url_verification → echo the challenge
-  agent_session_stopped → cancel(<channel>:<thread ts>) → the run aborts
-  agent_session_title_changed → never rename that thread again (naming.ts)
-  message → inboundOf(event) (events.ts)
-    bot messages, edits, and subtypes other than file_share → report skipped
-    top-level channel message without a mention → report skipped
-    text: Slack's &amp; &lt; &gt; escapes decoded; mentions keep their <@U…> form
-    address = <channel>:<thread ts, or the message ts for a new thread>
-    requestId = slack:<channel>:<message ts>
-    replyContext = { user, request }: the session's initiator, and the request for its title
-    files = the message's Slack files
-    mention or DM → deliver(message)                 run, reply in the thread
-    else, by threadMessages:
-      "context" (default) → deliver(message, { run: false })               context only
-      "run"               → deliver(message, { run: true, create: false }) run; the agent may answer or call no_reply
-      either way, threads without a conversation ignore it
-  core: fetchFile(url) for each file (files.ts) → saved in the conversation's env, images inline
-  socketMode: acknowledge the envelope after deliver; a failed deliver is redelivered by Slack
+  verify transport and parse the complete event envelope
+  resolve conversation metadata and live application configuration
+  choose scope address and trigger
+  read the address binding and admission cursor in its adapter lane
+  every_message → deliver directly with a monotonic cursor
+  mention → read bounded earlier history, then deliver history plus trigger
+  core admits durably → acknowledge Slack
 
-events(target, event) (reply.ts)
-  run_started   → agents.sessions.setStatus processing, with the request as the title of a new session (session.ts)
-  text          → a complete task with its title hidden and the narration as its details, before the call it explains
-  tool_started  → a task in progress, titled from the tool's name and first string argument
-                  the first task: chat.postMessage in the thread with a plan block titled "Working…" (plan.ts)
-                  later tasks: chat.update, at most every 2 s; past 50 tasks, the middle folds into "… N more steps"
-  tool_finished → the step's task complete or error
-  run_ended     → failed or aborted: plan titled "Stopped after N steps" or "Failed after N steps" (N counts tool
-                  calls), session active
-                  (aborted) or suspended; completed: nothing, send already finished the plan
+events(target, event)
+  run_started → agents.sessions.setStatus processing
+  text → narration step before the tool call it explains
+  tool_started / tool_finished → create or update a folded plan
+  run_ended failed or aborted → finish the plan and update session status
 
-send(reply, ctx) (reply.ts)
-  no text (no_reply)  → delete the plan message, set the session active; post nothing
-  otherwise           → plan titled "Done: N steps", then the answer as its own message
-                        steps that arrive after the reply are dropped
-                        first answer in a thread, with nameThread → rename the session in the background
-  address <channel>:<thread ts>  → chat.postMessage in the thread, session active
-  address <channel>:<any key>    → post a thread root in the channel
-    → returns { addressData: { threadTs }, alias: <channel>:<root ts> }
-    later replies to the key go to the thread, and thread messages reach the same conversation
+send(reply, ctx)
+  empty answer → discard the plan, set the session active, and post nothing
+  otherwise → finish the plan and post the complete answer in the resolved Slack thread
 ```
 
-- **Proactive cases.** Host code delivers to `<channel>:<key>`, such as `C0123:cus_acme`. The first reply opens the
-  thread, and the key keeps pointing at it. Until then there is no thread, so no plan and no session.
-- **Posted, not streamed.** Steps live in a posted message that is updated, so runs longer than Slack's 10-minute
-  stream limit work, and so do threads without a known recipient. A run without tool calls posts only its answer.
-- **The answer is posted whole.** Text the model writes next to a tool call is narration, shown as its own
-  entry between the steps, never mixed into the answer.
-- **Files.** Downloads send the bot token to `https://files.slack.com` only, with no redirects, a 30 s timeout, and a
-  50 MiB limit (`maxFileBytes`). Files shared from Google Drive and similar stay links in the text.
-- **Fixed origins.** API calls go to `https://slack.com/api` with no redirects and a 30 s timeout. `apiUrl` and
-  `filesUrl` exist for tests.
-- **At least once.** A crash between Slack accepting a post and the send task recording it posts again on restart. A
-  crash mid-run leaves the plan message as it was, and the reply posts in full.
-- **Long answers.** Text is cut at Slack's 12,000-character `markdown_text` limit.
-- **Reports, not logs.** The adapter writes nothing to the console. Each event it skips reaches the host's `onReport`
-  as `skipped`, with a one-line description. Failed status, plan, naming, and Socket Mode calls arrive as
-  `adapter_error`, with the thread's address when there is one.
+Tool-call plans post once and update at most every two seconds. Long runs do not depend on Slack streaming. A run without tool calls posts only its answer. Text next to a tool call is narration, not part of the final answer.
+
+Files download only from `https://files.slack.com`, without redirects, with a 30-second timeout and a 50 MiB default limit (`maxFileBytes`). API calls use `https://slack.com/api`, no redirects, and a 30-second timeout. `apiUrl` and `filesUrl` support tests. Answers are cut at Slack's 12,000-character `markdown_text` limit.
+
+Outbound sends are at least once. A crash after Slack accepts a post but before the send task records it can post again after restart. HTTP bodies over 1 MiB return 413; invalid signatures and timestamps older than five minutes return 401.
 
 ## Block Kit replies
 
@@ -148,22 +139,16 @@ const part: OutboundPart = {
 };
 ```
 
-A represented reply uses `chat.postMessage` with top-level `text` and `blocks`. Text-only replies retain the `markdown_text` payload. In a mixed reply, the adapter appends the supplied blocks in part order and converts each plain-text part to a `mrkdwn` section so every part stays visible. Unknown formats and malformed Block Kit envelopes use the complete Markdown message instead.
+A represented reply uses top-level `text` and `blocks`; text-only replies use `markdown_text`. Mixed replies preserve part order and convert plain-text parts to `mrkdwn` sections. Unknown formats and malformed representations use the complete Markdown message.
 
-If Slack answers `invalid_blocks`, `invalid_blocks_format`, or `msg_blocks_too_long`, the adapter posts the complete Markdown message once. Other API, transport, timeout, and abort errors still throw for durable retries. These rules preserve the original send idempotency key and never post fallback content after an ambiguous transport failure.
-
-Block Kit delivery is display-only. The adapter does not admit `block_actions` or other interaction events, and the core final-reply and `send_message` producers remain text-only.
+If Slack answers `invalid_blocks`, `invalid_blocks_format`, or `msg_blocks_too_long`, the adapter posts the complete Markdown message once. Other errors throw for durable retries. Block Kit delivery is display-only; interaction events are not admitted.
 
 ## Tests
 
-`src/` holds the adapter with its tests colocated: event mapping, signature checks, and address parsing (`events.test.ts`), file downloads
-(`files.test.ts`), and through a real harness against a local fake Slack API (`slack.test.ts`): a case thread, a DM
-with an image and a PDF saved in the conversation's environment, its narration and tool calls as plan tasks, and the answer after them,
-session naming and a person's rename, a thread where the agent declines with `no_reply`, and the stop button.
-Socket Mode runs against a local WebSocket server: `start` waits for `hello`, a bad bot token or a refused
-`apps.connections.open` rejects it, and an event in flight at stop is acked before the socket closes.
-`socket.test.ts` drives the connection on its own: a socket that closes before `hello` or sends none in time rejects
-`start`, events being handled are acked before the socket closes at stop, stop does not wait on a server that ignores
-close frames, a `disconnect` opens the replacement before the old socket closes, an unexpected drop reconnects at once,
-and nothing is reported once stopped.
-`nix develop -c pnpm --filter @aliou/pi-durable-channels-slack test`.
+Run from the repository root after building the core package:
+
+```sh
+pnpm --filter @aliou/pi-durable-channels-slack test
+```
+
+Tests cover event mapping, signatures, address parsing, file downloads, bounded Slack history, both scopes and triggers, runtime configuration changes and failures, out-of-order cursors, cross-thread replies, history authorization, diagnostics and notices, Block Kit fallback, session presentation, and Socket Mode lifecycle through a real Harness and local fake Slack services.

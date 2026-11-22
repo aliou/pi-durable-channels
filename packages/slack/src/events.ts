@@ -1,8 +1,4 @@
-import type {
-  DeliverOptions,
-  InboundFile,
-  InboundMessage,
-} from "@aliou/pi-durable-channels";
+import type { InboundFile, InboundMessage } from "@aliou/pi-durable-channels";
 import {
   arr,
   compile,
@@ -13,6 +9,7 @@ import {
   str,
   unknown,
 } from "@earendil-works/pi-schema";
+import type { SlackConfig } from "./config";
 import type { Thread } from "./target";
 
 const SlackFile = obj(
@@ -43,6 +40,8 @@ const UserMessageShape = obj(
 
 const UserMessage = compile(UserMessageShape);
 
+export type SlackMessage = Static<typeof UserMessageShape>;
+
 const TitleChanged = compile(
   obj(
     {
@@ -61,27 +60,21 @@ const SessionStopped = compile(
   ),
 );
 
-export type SlackInbound = { message: InboundMessage; options: DeliverOptions };
-
-export type ThreadMessages = "context" | "run";
-
-export type InboundSettings = {
-  botUserId: string;
-  threadMessages?: ThreadMessages;
+export type SlackInbound = {
+  message: InboundMessage;
+  options: { run: true; create: boolean };
 };
 
-const THREAD_MESSAGES: Readonly<Record<ThreadMessages, DeliverOptions>> = {
-  context: { run: false },
-  run: { run: true, create: false },
+export type Requester = {
+  user: string;
+  request: string;
+  threadTs: string;
 };
-
-export type Requester = { user: string; request: string };
 
 const MAX_REQUEST = 500;
-
 const USER_SUBTYPES = new Set<string | undefined>([undefined, "file_share"]);
 
-function filesOf(
+export function filesOf(
   files: readonly Static<typeof SlackFile>[] = [],
 ): InboundFile[] {
   return files.flatMap((file) =>
@@ -97,17 +90,18 @@ function filesOf(
   );
 }
 
-function deliverOptions(
-  event: Static<typeof UserMessageShape>,
-  settings: InboundSettings,
-): DeliverOptions | undefined {
-  if (event.channel_type === "im") return {};
-  if (event.text.includes(`<@${settings.botUserId}>`)) return {};
-  if (event.thread_ts === undefined) return undefined;
-  return THREAD_MESSAGES[settings.threadMessages ?? "context"];
+export function slackMessageOf(event: unknown): SlackMessage | undefined {
+  if (!UserMessage.check(event)) return undefined;
+  if (!USER_SUBTYPES.has(event.subtype)) return undefined;
+  if (event.bot_id !== undefined) return undefined;
+  return event;
 }
 
-function unescapeText(text: string): string {
+export function mentionsBot(event: SlackMessage, botUserId: string): boolean {
+  return event.text.includes(`<@${botUserId}>`);
+}
+
+export function unescapeText(text: string): string {
   return text
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -115,29 +109,42 @@ function unescapeText(text: string): string {
 }
 
 export function inboundOf(
-  event: unknown,
-  settings: InboundSettings,
-): SlackInbound | undefined {
-  if (!UserMessage.check(event)) return undefined;
-  if (!USER_SUBTYPES.has(event.subtype)) return undefined;
-  if (event.bot_id !== undefined) return undefined;
-  const options = deliverOptions(event, settings);
-  if (options === undefined) return undefined;
+  event: SlackMessage,
+  config: SlackConfig,
+): SlackInbound {
   const text = unescapeText(event.text);
+  const threadTs = event.thread_ts ?? event.ts;
+  const address =
+    config.scope === "conversation" && event.thread_ts === undefined
+      ? event.channel
+      : `${event.channel}:${threadTs}`;
+  const conversationAddress =
+    config.scope === "conversation" && event.thread_ts !== undefined
+      ? event.channel
+      : undefined;
   const requester: Requester = {
     user: event.user,
     request: text.slice(0, MAX_REQUEST),
+    threadTs,
   };
   return {
     message: {
-      address: `${event.channel}:${event.thread_ts ?? event.ts}`,
+      address,
+      ...(conversationAddress === undefined ? {} : { conversationAddress }),
       text,
       requestId: `slack:${event.channel}:${event.ts}`,
       author: event.user,
       replyContext: requester,
       files: filesOf(event.files),
     },
-    options,
+    options: {
+      run: true,
+      create:
+        config.trigger === "mention" ||
+        config.scope === "conversation" ||
+        event.channel_type === "im" ||
+        event.thread_ts === undefined,
+    },
   };
 }
 

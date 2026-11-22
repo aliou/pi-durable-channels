@@ -26,8 +26,8 @@ Stripe → POST /stripe/webhook                      host route (events.ts)
     later briefs: post in that thread
 
 teammate writes in the case thread (Socket Mode, or POST /slack/events)
-  without a mention → stored as context, no run
-  with @bot        → run, answer in the thread
+  without a mention → acknowledged in Slack, no core delivery or run
+  with @bot        → bounded earlier thread history plus the mention runs; answer in the thread
 ```
 
 - **One conversation per customer.** The agent sees every earlier signal of the customer: a recovered payment closes
@@ -44,7 +44,7 @@ teammate writes in the case thread (Socket Mode, or POST /slack/events)
 
 ## Try it
 
-Set up a Slack app as the [Slack channel README](../../channels/slack/README.md#slack-app-setup) describes, invite it
+Set up a Slack app as the [Slack channel README](../../../packages/slack/README.md#slack-app-setup) describes, invite it
 to the case channel, and either use Socket Mode or point Event Subscriptions at `/slack/events`. Configuration is in
 `.env.example`.
 

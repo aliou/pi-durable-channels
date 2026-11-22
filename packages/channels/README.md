@@ -111,7 +111,7 @@ The start context's `binding(address)` reads the calling channel's binding, incl
 
 `send` receives `addressData`, `replyContext`, and a stable `idempotencyKey`. It can return `{ addressData?, alias? }`: the data updates the binding, and an unbound alias is attached to the same conversation. Use this when an initial platform post creates the actual thread.
 
-Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. A reply with no parts means `no_reply` or an earlier input coalesced into a newer answer at the same address; post nothing and clear the adapter's presentation state.
+Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. Adapters can use it to select a per-message reply thread when several source addresses share a conversation. A reply with no parts means `no_reply` or an earlier input coalesced into a newer answer at the same address; post nothing and clear the adapter's presentation state.
 
 Implement `history` when the source supports authorized reads around opaque `after` or `before` cursors and the model may need records omitted from admitted input. The request includes the target address and a 32 KiB `maxBytes` bound. Return formatted `content`, an optional continuation `cursor`, and whether the source truncated the result. Use the provided signal for cancellation, enforce target-level authorization and network origin and timeout rules, and keep output bounded. History reads are read-only: never admit messages or advance the binding's admission cursor.
 

@@ -3,6 +3,7 @@ import { bool, compile, obj, opt, str } from "@earendil-works/pi-schema";
 const TIMEOUT_MS = 30_000;
 
 const Reply = compile(obj({ ok: bool(), error: opt(str()) }, { open: true }));
+const scopes = new WeakMap<Record<string, unknown>, readonly string[]>();
 
 export type SlackCall = (
   method: string,
@@ -12,11 +13,18 @@ export type SlackCall = (
 
 export class SlackApiError extends Error {
   constructor(
-    method: string,
+    readonly method: string,
     readonly code: string,
+    readonly scopes: readonly string[] = [],
   ) {
     super(`Slack ${method} failed: ${code}`);
   }
+}
+
+export function oauthScopes(
+  response: Record<string, unknown>,
+): readonly string[] {
+  return scopes.get(response) ?? [];
 }
 
 export function slackApi(token: string, apiUrl: string): SlackCall {
@@ -36,7 +44,12 @@ export function slackApi(token: string, apiUrl: string): SlackCall {
       throw new Error(`Slack ${method} answered ${response.status}`);
     const reply: unknown = await response.json();
     if (!Reply.check(reply)) throw new Error(`Slack ${method} answered badly`);
-    if (!reply.ok) throw new SlackApiError(method, reply.error ?? "unknown");
+    const granted = response.headers.get("x-oauth-scopes");
+    const grantedScopes =
+      granted === null ? [] : granted.split(",").map((scope) => scope.trim());
+    scopes.set(reply, grantedScopes);
+    if (!reply.ok)
+      throw new SlackApiError(method, reply.error ?? "unknown", grantedScopes);
     return reply;
   };
 }

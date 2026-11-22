@@ -33,6 +33,11 @@ export type FakeOptions = {
   hello?: boolean;
   dropAfterMs?: number;
   holdFiles?: Promise<void>;
+  respond?(
+    method: string,
+    body: Record<string, unknown>,
+    fallback: Record<string, unknown>,
+  ): Record<string, unknown>;
 };
 
 const servers: (() => Promise<void>)[] = [];
@@ -45,10 +50,31 @@ function reply(
   method: string,
   host: string,
   ts: () => string,
+  body: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (method === "auth.test") return { ok: true, user_id: "UBOT" };
+  if (method === "auth.test")
+    return {
+      ok: true,
+      user_id: "UBOT",
+      team_id: "T1",
+      team: "Acme",
+    };
   if (method === "apps.connections.open")
     return { ok: true, url: `ws://${host}/socket` };
+  if (method === "conversations.info") {
+    const im = String(body.channel).startsWith("D");
+    return {
+      ok: true,
+      channel: {
+        id: body.channel,
+        ...(im ? {} : { name: "general" }),
+        is_channel: !im,
+        is_im: im,
+      },
+    };
+  }
+  if (method === "conversations.history" || method === "conversations.replies")
+    return { ok: true, messages: [], has_more: false };
   return { ok: true, ts: ts() };
 }
 
@@ -117,12 +143,16 @@ export async function fakeSlack(
       }
       const postError =
         method === "chat.postMessage" ? options.postErrors?.shift() : undefined;
+      const fallback = reply(method, request.headers.host ?? "", ts, body);
       const answer = postError
         ? { ok: false, error: postError }
         : options.refuse?.includes(method)
           ? { ok: false, error: "invalid_auth" }
-          : reply(method, request.headers.host ?? "", ts);
-      response.writeHead(200, { "content-type": "application/json" });
+          : (options.respond?.(method, body, fallback) ?? fallback);
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "x-oauth-scopes": "chat:write,channels:history",
+      });
       response.end(JSON.stringify(answer));
     });
   });

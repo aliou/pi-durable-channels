@@ -41,9 +41,8 @@ import {
   until,
 } from "../test/fake-slack";
 import { SLACK_BLOCK_KIT, type SlackBlockKit } from "./block-kit";
-import type { ThreadMessages } from "./events";
 import type { NameThread } from "./naming";
-import { slackChannel } from "./slack";
+import { type SlackOptions, slackChannel } from "./slack";
 import { httpEvents, type SlackTransport, socketMode } from "./transport";
 
 const FILES = {
@@ -59,6 +58,7 @@ afterEach(async () => {
 });
 
 const held: { release?: () => void } = {};
+const releaseHeld = () => held.release?.();
 
 const holdTool = defineExtension({
   name: "test-hold",
@@ -115,10 +115,12 @@ type OpenOptions = {
   faux?: Parameters<typeof fauxProvider>[0];
   env?: HarnessOptions["env"];
   extensions?: Extension[];
-  threadMessages?: ThreadMessages;
+  config?: SlackOptions["config"];
   nameThread?: NameThread;
   transport?: SlackTransport;
   fake?: FakeOptions;
+  appId?: string;
+  configToken?: string;
 };
 
 async function open(options: OpenOptions = {}) {
@@ -128,7 +130,16 @@ async function open(options: OpenOptions = {}) {
     transport: options.transport ?? httpEvents(SECRET),
     apiUrl: slackApi.apiUrl,
     filesUrl: slackApi.origin,
-    threadMessages: options.threadMessages,
+    appId: options.appId,
+    configToken: options.configToken,
+    config:
+      options.config ??
+      ((target) => ({
+        scope: "thread",
+        trigger: target.conversationType === "im" ? "every_message" : "mention",
+        context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+        readTool: true,
+      })),
     nameThread: options.nameThread,
   });
   const reports: ChannelReport[] = [];
@@ -175,7 +186,7 @@ async function open(options: OpenOptions = {}) {
   const post = (request: Request) => served(slack)(request);
   const event = (body: Record<string, unknown>) =>
     post(signed({ type: "event_callback", team_id: "T1", event: body }));
-  return { post, hub, harness, seen, event, reports, ...slackApi };
+  return { post, hub, harness, seen, event, reports, slack, ...slackApi };
 }
 
 const posts = (calls: Call[]) =>
@@ -212,6 +223,12 @@ async function direct(
     botToken: "xoxb-test",
     transport: httpEvents(SECRET),
     apiUrl: api.apiUrl,
+    config: () => ({
+      scope: "thread",
+      trigger: "every_message",
+      context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+      readTool: true,
+    }),
     nameThread: options.nameThread,
   });
   const send = (
@@ -258,6 +275,12 @@ describe("slack channel end to end", () => {
     const slack = slackChannel({
       botToken: "xoxb-test",
       transport: socketMode("xapp-test"),
+      config: () => ({
+        scope: "thread",
+        trigger: "every_message",
+        context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+        readTool: true,
+      }),
     });
     expect(slack.fetch).toBeUndefined();
   });
@@ -305,6 +328,7 @@ describe("slack channel end to end", () => {
         signed({
           type: "event_callback",
           event_id: "Ev1",
+          team_id: "T1",
           event: message({ thread_ts: "100.000100", ...fields }),
         }),
       );
@@ -326,7 +350,6 @@ describe("slack channel end to end", () => {
     expect(seen.texts.at(-1)).toEqual([
       "payment failed evt_1",
       "payment failed evt_2",
-      "they emailed us",
       "<@UBOT> next step?",
     ]);
     await expect(hub.status(first.submissionId)).resolves.toEqual({
@@ -395,8 +418,9 @@ describe("slack channel end to end", () => {
     expect(seen.images).toContain("image/png");
 
     const used = methods(calls).filter((method) => !method.startsWith("GET"));
-    expect(used.slice(0, 3)).toEqual([
+    expect(used.slice(0, 4)).toEqual([
       "auth.test",
+      "conversations.info",
       "agents.sessions.setStatus",
       "chat.postMessage",
     ]);
@@ -524,7 +548,15 @@ describe("slack channel end to end", () => {
 
   it("runs every message of a thread it belongs to, and stays quiet when the agent declines", async () => {
     const { hub, harness, calls, event } = await open({
-      threadMessages: "run",
+      config: (target) => ({
+        scope: "thread",
+        trigger:
+          target.conversationType === "im" || target.threadTs !== undefined
+            ? "every_message"
+            : "mention",
+        context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+        readTool: true,
+      }),
       respond: (transcript) => {
         const last = transcript.messages.at(-1);
         const quiet =
@@ -595,6 +627,348 @@ describe("slack channel end to end", () => {
     await until(() => calls.some(({ method }) => method === "chat.update"));
     const update = calls.find(({ method }) => method === "chat.update");
     expect(update?.body).toMatchObject({ text: "Stopped after 1 step" });
+    await harness.close(context);
+  });
+  it("shares a conversation across Slack threads and keeps each reply in its triggering thread", async () => {
+    let scope: "thread" | "conversation" = "conversation";
+    const targets: Parameters<SlackOptions["config"]>[0][] = [];
+    const { hub, harness, calls, event, seen } = await open({
+      config: (target) => {
+        targets.push(target);
+        return {
+          scope,
+          trigger: "mention",
+          context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+          readTool: true,
+        };
+      },
+    });
+    await hub.start();
+    await event(message({ text: "<@UBOT> first" }));
+    await harness.waitForIdle(context);
+    await event(
+      message({
+        thread_ts: "200.000100",
+        ts: "250.1",
+        text: "<@UBOT> follow up",
+      }),
+    );
+    await harness.waitForIdle(context);
+    await event(message({ ts: "300.1", text: "<@UBOT> another root" }));
+    await harness.waitForIdle(context);
+
+    expect(posts(calls).map(({ thread_ts }) => thread_ts)).toEqual([
+      "200.000100",
+      "200.000100",
+      "300.1",
+    ]);
+    expect(seen.texts.at(-1)).toEqual([
+      "<@UBOT> first",
+      "<@UBOT> follow up",
+      "<@UBOT> another root",
+    ]);
+    const conversation = await hub.conversationOf({
+      channel: "slack",
+      address: "C1",
+    });
+    await expect(
+      hub.conversationOf({ channel: "slack", address: "C1:200.000100" }),
+    ).resolves.toBe(conversation);
+    expect(targets[0]).toEqual({
+      teamId: "T1",
+      teamName: "Acme",
+      conversationId: "C1",
+      conversationName: "general",
+      conversationType: "channel",
+      threadTs: undefined,
+      userId: "U1",
+    });
+
+    scope = "thread";
+    await event(
+      message({
+        thread_ts: "200.000100",
+        ts: "350.1",
+        text: "<@UBOT> still bound",
+      }),
+    );
+    await harness.waitForIdle(context);
+    await expect(
+      hub.conversationOf({ channel: "slack", address: "C1:200.000100" }),
+    ).resolves.toBe(conversation);
+    expect(
+      calls.filter(({ method }) => method === "conversations.info"),
+    ).toHaveLength(1);
+    await harness.close(context);
+  });
+
+  it("cancels a shared conversation from a Slack thread without an exact alias", async () => {
+    const { hub, harness, event, calls } = await open({
+      extensions: [holdTool],
+      config: () => ({
+        scope: "conversation",
+        trigger: "mention",
+        context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+        readTool: true,
+      }),
+      respond: (transcript) =>
+        transcript.messages.at(-1)?.role === "user"
+          ? fauxAssistantMessage(fauxToolCall("hold", {}), {
+              stopReason: "toolUse",
+            })
+          : fauxAssistantMessage("done"),
+    });
+    await hub.start();
+    held.release = undefined;
+    await event(message({ text: "<@UBOT> hold this" }));
+    await until(() => held.release !== undefined);
+    const stopped = event({
+      type: "agent_session_stopped",
+      channel: "C1",
+      thread_ts: "200.000100",
+    });
+    releaseHeld();
+    await stopped;
+    await harness.waitForIdle(context);
+    await until(() =>
+      calls.some(
+        ({ method, body }) =>
+          method === "agents.sessions.setStatus" && body.status === "active",
+      ),
+    );
+    expect(
+      calls
+        .filter(({ method }) => method === "agents.sessions.setStatus")
+        .map(({ body }) => body.status),
+    ).toEqual(["processing", "active"]);
+    await harness.close(context);
+  });
+
+  it("retries failed metadata lookups without caching a missing name", async () => {
+    let fail = true;
+    const names: (string | undefined)[] = [];
+    const { hub, harness, event, calls } = await open({
+      fake: {
+        respond: (method, _body, fallback) => {
+          if (method !== "conversations.info") return fallback;
+          if (fail) {
+            fail = false;
+            return { ok: false, error: "missing_scope" };
+          }
+          return fallback;
+        },
+      },
+      config: (target) => {
+        names.push(target.conversationName);
+        return {
+          scope: "thread",
+          trigger: "mention",
+          context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+          readTool: true,
+        };
+      },
+    });
+    await hub.start();
+    await event(message({ channel_type: "channel", text: "<@UBOT> first" }));
+    await event(message({ ts: "300.1", text: "<@UBOT> second" }));
+    await harness.waitForIdle(context);
+    expect(names).toEqual([undefined, "general"]);
+    expect(
+      calls.filter(({ method }) => method === "conversations.info"),
+    ).toHaveLength(2);
+    expect(
+      posts(calls).filter(({ markdown_text }) =>
+        String(markdown_text).includes("Slack adapter issue"),
+      ),
+    ).toHaveLength(1);
+    await harness.close(context);
+  });
+
+  it("admits out-of-order messages without moving the cursor backward", async () => {
+    let trigger: "every_message" | "mention" = "every_message";
+    const { hub, harness, event, calls } = await open({
+      config: () => ({
+        scope: "thread",
+        trigger,
+        context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+        readTool: true,
+      }),
+    });
+    await hub.start();
+    await event(message({ channel: "D1", channel_type: "im", ts: "300.1" }));
+    await event(
+      message({
+        channel: "D1",
+        channel_type: "im",
+        thread_ts: "300.1",
+        ts: "250.1",
+        text: "late",
+      }),
+    );
+    await harness.waitForIdle(context);
+    trigger = "mention";
+    await event(
+      message({
+        channel: "D1",
+        channel_type: "im",
+        thread_ts: "300.1",
+        ts: "400.1",
+        text: "<@UBOT> next",
+      }),
+    );
+    await harness.waitForIdle(context);
+    expect(
+      calls.find(({ method }) => method === "conversations.replies")?.body,
+    ).toMatchObject({ oldest: "300.1", latest: "400.1" });
+    await harness.close(context);
+  });
+
+  it("admits passive Slack messages only in a later bounded mention batch", async () => {
+    const { hub, harness, event, seen } = await open({
+      fake: {
+        respond: (method, _body, fallback) =>
+          method === "conversations.replies"
+            ? {
+                ok: true,
+                messages: [
+                  message({ ts: "250.1", text: "passive context" }),
+                  message({ ts: "260.1", text: "bot notice", bot_id: "B1" }),
+                ],
+              }
+            : fallback,
+      },
+    });
+    await hub.start();
+    await event(message({ text: "<@UBOT> start" }));
+    await harness.waitForIdle(context);
+    await event(
+      message({
+        thread_ts: "200.000100",
+        ts: "250.1",
+        text: "passive context",
+      }),
+    );
+    await event(
+      message({
+        thread_ts: "200.000100",
+        ts: "300.1",
+        text: "<@UBOT> continue",
+      }),
+    );
+    await harness.waitForIdle(context);
+    expect(seen.texts).toHaveLength(2);
+    expect(seen.texts[1]?.at(-1)).toContain("passive context");
+    expect(seen.texts[1]?.at(-1)).toContain(
+      "Triggering message:\n<@UBOT> continue",
+    );
+    expect(seen.texts[1]?.at(-1)).not.toContain("bot notice");
+
+    await event(
+      message({ thread_ts: "200.000100", ts: "290.1", text: "<@UBOT> old" }),
+    );
+    await harness.waitForIdle(context);
+    expect(seen.texts).toHaveLength(2);
+    await harness.close(context);
+  });
+
+  it("degrades to the trigger when history fails and keeps notices out of the model input", async () => {
+    const { hub, harness, event, reports, calls, seen } = await open({
+      fake: {
+        respond: (method, _body, fallback) =>
+          method === "conversations.replies"
+            ? { ok: false, error: "missing_scope" }
+            : fallback,
+      },
+    });
+    await hub.start();
+    await event(message({ text: "<@UBOT> help" }));
+    await harness.waitForIdle(context);
+    expect(seen.texts[0]?.at(-1)).toContain(
+      "Earlier Slack history was unavailable.",
+    );
+    expect(seen.texts[0]?.at(-1)).not.toContain("Slack adapter issue");
+    expect(reports.some(({ kind }) => kind === "adapter_error")).toBe(true);
+    expect(posts(calls).map(({ markdown_text }) => markdown_text)).toEqual([
+      expect.stringContaining("Slack adapter issue"),
+      expect.stringContaining("Earlier Slack history was unavailable."),
+    ]);
+    await harness.close(context);
+  });
+
+  it("resolves live history authorization without advancing the admission cursor", async () => {
+    let readTool = false;
+    const users: (string | undefined)[] = [];
+    const { hub, harness, event, slack, calls } = await open({
+      config: (target) => {
+        users.push(target.userId);
+        return {
+          scope: "thread",
+          trigger: "mention",
+          context: { maxMessages: 20, maxBytes: 20_000, maxFiles: 5 },
+          readTool,
+        };
+      },
+    });
+    await hub.start();
+    await event(message({ text: "<@UBOT> start" }));
+    await harness.waitForIdle(context);
+    const request = {
+      address: "C1:200.000100",
+      maxBytes: 1000,
+    };
+    await expect(
+      slack.history?.(request, { signal: new AbortController().signal }),
+    ).rejects.toThrow("disabled");
+    readTool = true;
+    await expect(
+      slack.history?.(request, { signal: new AbortController().signal }),
+    ).resolves.toMatchObject({ content: "", truncated: false });
+    expect(users.at(-1)).toBeUndefined();
+    await event(
+      message({ thread_ts: "200.000100", ts: "300.1", text: "<@UBOT> next" }),
+    );
+    await harness.waitForIdle(context);
+    expect(
+      calls.find(
+        ({ method, body }) =>
+          method === "conversations.replies" && body.latest === "300.1",
+      )?.body,
+    ).toMatchObject({ oldest: "200.000100", latest: "300.1" });
+    await harness.close(context);
+  });
+
+  it("rejects configuration failures before admission", async () => {
+    const { hub, harness, event } = await open({
+      config: () => Promise.reject(new Error("config store unavailable")),
+    });
+    await hub.start();
+    await expect(event(message({ text: "<@UBOT> start" }))).rejects.toThrow(
+      "config store unavailable",
+    );
+    await expect(
+      hub.conversationOf({ channel: "slack", address: "C1:200.000100" }),
+    ).resolves.toBeUndefined();
+    await harness.close(context);
+  });
+
+  it("rejects a manifest without required message subscriptions", async () => {
+    const { hub, harness } = await open({
+      appId: "A1",
+      configToken: "xoxe-test",
+      fake: {
+        respond: (method, _body, fallback) =>
+          method === "apps.manifest.export"
+            ? {
+                ok: true,
+                manifest: {
+                  settings: { event_subscriptions: { bot_events: [] } },
+                  oauth_config: { scopes: { bot: [] } },
+                },
+              }
+            : fallback,
+      },
+    });
+    await expect(hub.start()).rejects.toThrow("lacks events");
     await harness.close(context);
   });
 });
@@ -739,6 +1113,48 @@ describe("slack block kit", () => {
     ]);
   });
 
+  it("keeps bare proactive posts top-level and uses only the inbound reply thread", async () => {
+    const { calls, send } = await direct();
+    await expect(
+      send([{ type: "text", text: "Channel notice" }], "C1"),
+    ).resolves.toBeUndefined();
+    await send([{ type: "text", text: "Thread answer" }], "C1", {
+      threadTs: "200.000100",
+    });
+    expect(posts(calls)).toEqual([
+      { channel: "C1", markdown_text: "Channel notice" },
+      {
+        channel: "C1",
+        markdown_text: "Thread answer",
+        thread_ts: "200.000100",
+      },
+    ]);
+  });
+
+  it("uses the bare address reply context for decline status and naming", async () => {
+    const { calls, send } = await direct({
+      nameThread: async () => "Shared conversation",
+    });
+    const replyContext = {
+      user: "U1",
+      request: "Check this",
+      threadTs: "200.000100",
+    };
+    await send([], "C1", replyContext);
+    await send([{ type: "text", text: "Answer" }], "C1", replyContext);
+    await until(() =>
+      calls.some(({ method }) => method === "agents.sessions.rename"),
+    );
+    expect(
+      calls
+        .filter(({ method }) => method === "agents.sessions.setStatus")
+        .map(({ body }) => body.thread_ts),
+    ).toEqual(["200.000100", "200.000100"]);
+    expect(
+      calls.find(({ method }) => method === "agents.sessions.rename")?.body,
+    ).toMatchObject({ thread_ts: "200.000100", title: "Shared conversation" });
+  });
+
   it("creates a thread alias for a represented thread root", async () => {
     const { send } = await direct();
     await expect(
@@ -854,6 +1270,7 @@ describe("slack socket mode", () => {
       envelope_id: "E1",
       payload: {
         type: "event_callback",
+        team_id: "T1",
         event: message({
           channel: "D1",
           channel_type: "im",
