@@ -9,6 +9,7 @@ fi
 direnv allow
 
 # Keep .direnv (flake symlinks) out of git and biome's scan; local to this clone.
+mkdir -p .git/info
 if ! grep -qx '.direnv' .git/info/exclude 2>/dev/null; then
   echo '.direnv' >> .git/info/exclude
 fi
