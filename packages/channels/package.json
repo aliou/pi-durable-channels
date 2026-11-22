@@ -34,10 +34,10 @@
     "prepack": "pnpm build"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.5.1",
-    "@earendil-works/pi-ai": "1.5.1",
-    "@earendil-works/pi-durable": "1.5.1",
-    "@earendil-works/pi-schema": "1.5.1"
+    "@earendil-works/chord": "1.6.0",
+    "@earendil-works/pi-ai": "1.6.0",
+    "@earendil-works/pi-durable": "1.6.0",
+    "@earendil-works/pi-schema": "1.6.0"
   },
   "devDependencies": {
     "vitest": "^5.1.0"

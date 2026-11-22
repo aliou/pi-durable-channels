@@ -4,7 +4,7 @@ import {
   type EntryRecord,
   type GenerationHooks,
   type HookApi,
-  runEndTask,
+  hookTask,
 } from "@earendil-works/pi-durable";
 import { ChannelMessage } from "./doc";
 import type { SendTask } from "./send";
@@ -53,7 +53,7 @@ export function replyHook(Send: SendTask): GenerationHooks["afterRun"] {
     const answer = await api.entry(run.answer, context);
     const parts = run.reason === "terminate" ? [] : answerParts(answer);
     const tasks = messages.map(({ id, data: { author: _author, ...target } }) =>
-      runEndTask(Send, { ...target, parts, idempotencyKey: replyKey(id) }),
+      hookTask(Send, { ...target, parts, idempotencyKey: replyKey(id) }),
     );
     return { tasks };
   };
