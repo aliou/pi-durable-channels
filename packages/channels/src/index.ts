@@ -20,6 +20,8 @@ export type {
   BusyPolicy,
   ChannelAdapter,
   ChannelEvent,
+  ChannelHistoryRequest,
+  ChannelHistoryResult,
   ChannelRegistration,
   ChannelReport,
   ChannelsOptions,

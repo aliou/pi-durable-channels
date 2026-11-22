@@ -36,6 +36,8 @@ export async function bindAddress(
     ...(addressData === undefined
       ? {}
       : { addressData: copyJson(addressData) }),
+    ...(existing?.via === undefined ? {} : { via: existing.via }),
+    ...(existing?.cursor === undefined ? {} : { cursor: existing.cursor }),
   });
   await selectChannels(tx, conversationId);
 }

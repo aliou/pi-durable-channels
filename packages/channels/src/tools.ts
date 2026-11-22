@@ -4,19 +4,51 @@ import {
   type Extension,
   section,
 } from "@earendil-works/pi-durable";
-import { obj, str } from "@earendil-works/pi-schema";
+import { obj, opt, str } from "@earendil-works/pi-schema";
 import type { Send } from "./core";
-import { ChannelsDoc, conversationAddresses, findBinding } from "./doc";
+import {
+  ChannelsDoc,
+  canonicalConversationAddresses,
+  conversationAddresses,
+  findBinding,
+} from "./doc";
+import type { AdapterLookup } from "./send";
 
 export const TOOLS_EXTENSION = "channels-tools";
 
 export const NO_REPLY = "no_reply";
 
+const HISTORY_BYTES = 32 * 1024;
+
 function text(value: string, isError = false) {
   return { output: [{ type: "text" as const, text: value }], isError };
 }
 
-export function defineChannelTools(send: Send): Extension {
+function boundedContent(content: string): {
+  content: string;
+  truncated: boolean;
+} {
+  const encoder = new TextEncoder();
+  let end = 0;
+  let size = 0;
+  let truncated = false;
+  for (const character of content) {
+    const length = encoder.encode(character).length;
+    if (size + length > HISTORY_BYTES) {
+      truncated = true;
+      break;
+    }
+    size += length;
+    end += character.length;
+  }
+  return { content: truncated ? content.slice(0, end) : content, truncated };
+}
+
+export function defineChannelTools(
+  send: Send,
+  adapterFor: AdapterLookup,
+  historyAvailable: boolean,
+): Extension {
   const sendMessage = defineTool({
     name: "send_message",
     description:
@@ -56,6 +88,52 @@ export function defineChannelTools(send: Send): Extension {
     },
   });
 
+  const readHistory = defineTool({
+    name: "read_history",
+    description:
+      "Read bounded source history for one of your channel addresses. Use after or before to continue from an opaque cursor returned by the channel.",
+    parameters: obj({
+      channel: str(),
+      address: str(),
+      after: opt(str()),
+      before: opt(str()),
+    }),
+    replay: "safe",
+    execute: async ({ channel, address, after, before }, api, context) => {
+      const state = await api.snapshot(ChannelsDoc, context);
+      const binding = findBinding(state, { channel, address });
+      if (binding?.conversationId !== api.conversationId)
+        return text(`Unknown address ${address} on channel ${channel}.`, true);
+      const adapter = adapterFor(channel);
+      if (adapter?.history === undefined)
+        return text(`History is unavailable on channel ${channel}.`, true);
+      try {
+        const result = await adapter.history(
+          {
+            address,
+            ...(after === undefined ? {} : { after }),
+            ...(before === undefined ? {} : { before }),
+            maxBytes: HISTORY_BYTES,
+          },
+          { signal: context.abortSignal ?? new AbortController().signal },
+        );
+        const bounded = boundedContent(result.content);
+        return text(
+          JSON.stringify({
+            content: bounded.content,
+            ...(result.cursor === undefined ? {} : { cursor: result.cursor }),
+            truncated: result.truncated || bounded.truncated,
+          }),
+        );
+      } catch (error) {
+        return text(
+          `History read failed: ${error instanceof Error ? error.message : String(error)}`,
+          true,
+        );
+      }
+    },
+  });
+
   const noReply = defineTool({
     name: NO_REPLY,
     description:
@@ -72,7 +150,7 @@ export function defineChannelTools(send: Send): Extension {
     "channels",
     async ({ read, conversationId }, context) => {
       const state = await read.snapshot(ChannelsDoc, context);
-      const addresses = conversationAddresses(state, conversationId);
+      const addresses = canonicalConversationAddresses(state, conversationId);
       const lines = addresses.map(
         ({ channel, address }) => `- ${channel}: ${address}`,
       );
@@ -85,7 +163,12 @@ export function defineChannelTools(send: Send): Extension {
 
   return defineExtension({
     name: TOOLS_EXTENSION,
-    tools: [sendMessage, listAddresses, noReply],
+    tools: [
+      sendMessage,
+      listAddresses,
+      ...(historyAvailable ? [readHistory] : []),
+      noReply,
+    ],
     sections: [channelsSection],
   });
 }

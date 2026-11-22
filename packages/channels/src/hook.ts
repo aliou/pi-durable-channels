@@ -36,6 +36,18 @@ export async function runEntries(
   return entries;
 }
 
+export function latestMessageIds(
+  entries: readonly EntryRecord[],
+): Set<EntryId> {
+  const latest = new Map<string, EntryId>();
+  for (const entry of entries) {
+    if (!ChannelMessage.is(entry)) continue;
+    const key = JSON.stringify([entry.data.channel, entry.data.address]);
+    latest.set(key, entry.id);
+  }
+  return new Set(latest.values());
+}
+
 function answerParts(entry: EntryRecord | undefined): OutboundPart[] {
   const messages = entry?.model ?? [];
   const text = messages
@@ -52,8 +64,13 @@ export function replyHook(Send: SendTask): GenerationHooks["afterRun"] {
     if (messages.length === 0) return undefined;
     const answer = await api.entry(run.answer, context);
     const parts = run.reason === "terminate" ? [] : answerParts(answer);
+    const latest = latestMessageIds(messages);
     const tasks = messages.map(({ id, data: { author: _author, ...target } }) =>
-      hookTask(Send, { ...target, parts, idempotencyKey: replyKey(id) }),
+      hookTask(Send, {
+        ...target,
+        parts: latest.has(id) ? parts : [],
+        idempotencyKey: replyKey(id),
+      }),
     );
     return { tasks };
   };

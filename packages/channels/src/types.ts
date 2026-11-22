@@ -6,6 +6,7 @@ import type {
   ConversationInit,
   SubmissionId,
 } from "@earendil-works/pi-durable";
+import type { Binding } from "./doc";
 
 export type BusyPolicy = "queue" | "steer";
 
@@ -13,6 +14,8 @@ export type InboundFile = { name: string; mimeType: string; url: string };
 
 export type InboundMessage = {
   address: string;
+  conversationAddress?: string;
+  cursor?: string;
   text: string;
   requestId: string;
   author: string;
@@ -105,8 +108,22 @@ export type ChannelReport =
 export type AdapterStart = {
   deliver: Deliver;
   cancel(address: string): Promise<void>;
+  binding(address: string): Promise<Binding | undefined>;
   report(report: AdapterReport): void;
   signal: AbortSignal;
+};
+
+export type ChannelHistoryRequest = {
+  address: string;
+  after?: string;
+  before?: string;
+  maxBytes: number;
+};
+
+export type ChannelHistoryResult = {
+  content: string;
+  cursor?: string;
+  truncated: boolean;
 };
 
 export type ChannelAdapter = {
@@ -119,6 +136,10 @@ export type ChannelAdapter = {
     ctx: SendContext,
   ): Promise<SendResult | undefined | void>;
   events?(target: ReplyTarget, event: ChannelEvent): void | Promise<void>;
+  history?(
+    request: ChannelHistoryRequest,
+    ctx: { signal: AbortSignal },
+  ): Promise<ChannelHistoryResult>;
   fetchFile?(url: string): Promise<Uint8Array>;
 };
 

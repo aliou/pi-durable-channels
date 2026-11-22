@@ -82,11 +82,15 @@ Start the hub after opening the Harness. On shutdown, stop the hub before closin
 
 - `whenBusy: "queue"` is the default: a message gets its own run after the current one. `"steer"` joins the current run. Set a default on `createChannels` or override per delivery.
 - `run: false` stores a message as context without starting a run or creating a conversation.
-- `create: false` permits a run only for an already-bound address.
+- `create: false` permits a run only for an already-bound address or an alias whose `conversationAddress` is bound.
+- `conversationAddress` provides a same-channel fallback route when `address` is unbound. The exact binding always wins. An alias records its conversation address in `via` but keeps its own address data and reply destination. Creating through an alias binds both addresses; it never copies alias data or cursors to the canonical address.
+- `cursor` stores an opaque per-address admission cursor. Successful, non-duplicate admission commits it with the submission. A duplicate, failed admission, or delivery without a cursor leaves the stored value unchanged. The core does not interpret cursors.
 - A repeated `requestId` within the same conversation returns the original receipt without starting another run. IDs must distinguish messages from all addresses sharing that conversation.
 - `deliver` resolves after admission, not after the reply. Attachments are fetched before admission and can delay acknowledgement.
 
-An address identifies a destination within a channel, such as a Slack thread. Several addresses can bind to the same conversation, but an address belongs to only one conversation at a time. Bind from host code with `hub.bind(target, conversationId)`, or from a tool's commit with `channels.bind(tx, target, api.conversationId)`. Binding an address owned by another conversation throws.
+An address identifies a destination within a channel, such as a Slack thread. Several addresses can bind to the same conversation, but an address belongs to only one conversation at a time. Bind from host code with `hub.bind(target, conversationId)`, or from a tool's commit with `channels.bind(tx, target, api.conversationId)`. Binding an address owned by another conversation throws. Explicit binds and send-result updates preserve alias metadata and admission cursors.
+
+A run coalesces final replies by channel and address: only the newest input at each address carries the final answer. Earlier inputs complete with empty sends and retain their own `reply:<entry>` idempotency keys. Distinct addresses sharing a conversation each receive one answer.
 
 ## Adapter contract
 
@@ -101,12 +105,15 @@ Implement the exported `ChannelAdapter` type:
 | `send(message, ctx)` | Required. Post the outbound parts; throwing retries the send |
 | `events(target, event)` | Optional best-effort run presentation |
 | `fetchFile(url)` | Optional authenticated attachment download |
+| `history(request, ctx)` | Optional bounded, formatted source-history read around opaque cursors |
 
-The start context's `signal` aborts during hub shutdown. The send context has its own task signal; wire it into outbound I/O. `cancel(address)` stops the run, sends, and notifications for the bound conversation.
+The start context's `binding(address)` reads the calling channel's binding, including `via` and `cursor`. Its `signal` aborts during hub shutdown. The send context has its own task signal; wire it into outbound I/O. `cancel(address)` stops the run, sends, and notifications for the bound conversation.
 
 `send` receives `addressData`, `replyContext`, and a stable `idempotencyKey`. It can return `{ addressData?, alias? }`: the data updates the binding, and an unbound alias is attached to the same conversation. Use this when an initial platform post creates the actual thread.
 
-Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. A reply with no parts means `no_reply`; post nothing and clear the adapter's presentation state.
+Address data persists until replaced. Reply context belongs to one message, and is also passed to its run events. A reply with no parts means `no_reply` or an earlier input coalesced into a newer answer at the same address; post nothing and clear the adapter's presentation state.
+
+Implement `history` when the source supports authorized reads around opaque `after` or `before` cursors and the model may need records omitted from admitted input. The request includes the target address and a 32 KiB `maxBytes` bound. Return formatted `content`, an optional continuation `cursor`, and whether the source truncated the result. Use the provided signal for cancellation, enforce target-level authorization and network origin and timeout rules, and keep output bounded. History reads are read-only: never admit messages or advance the binding's admission cursor.
 
 Use the published [Slack adapter](https://github.com/aliou/pi-durable-channels/tree/main/packages/slack) for Slack. [GitHub and webhook adapters](https://github.com/aliou/pi-durable-channels/tree/main/examples/channels) are copyable examples, not published adapter packages. The [examples guide](https://github.com/aliou/pi-durable-channels/tree/main/examples) covers complete platform integrations.
 
@@ -147,6 +154,8 @@ The default retry policy is five attempts with a one-second initial delay and ex
 
 Adapters receive `run_started`, narration `text`, `tool_started`, `tool_finished`, and `run_ended` with `completed`, `failed`, or `aborted`. Events follow committed state; the final answer arrives through `send`, not a run event. A lone `no_reply` call and its accompanying text produce no activity events.
 
+Run events use the same newest-input-per-address selection as final replies. When steering adds a newer input, later events go only to that recipient.
+
 Events can be lost while the host is down and can repeat after restart. Activity events have an `id`; use it for deduplication. `run_started` and `run_ended` have no event ID: use the event type and `target.idempotencyKey`. That target key matches the corresponding reply's send key. Anything requiring durable delivery belongs in `send`.
 
 ## Attachments
@@ -175,7 +184,9 @@ After `end`, another message creates a conversation only if the channel's factor
 
 ## Model tools
 
-`channels.tools` adds `send_message({ channel, address, text })`, `list_addresses()`, `no_reply()`, and an address prompt section. Sending and listing are restricted to addresses bound to the calling conversation. `send_message` queues a background notification; the final answer already goes to the inbound address.
+`channels.tools` adds `send_message({ channel, address, text })`, `list_addresses()`, `no_reply()`, and an address prompt section. When at least one adapter supports history, it also adds `read_history({ channel, address, after?, before? })`. Sending and listing are restricted to addresses bound to the calling conversation, including aliases. The prompt lists only canonical addresses, without `via` metadata. `send_message` queues a background notification; the final answer already goes to the inbound address.
+
+`read_history` returns formatted content, an optional continuation cursor, and a truncation flag. It rejects unsupported channels and addresses outside the calling conversation, enforces the 32 KiB output bound without splitting UTF-8 text, and performs no durable writes or admission-cursor changes. Adapters control source-specific authorization and formatting; adapter failures return tool errors.
 
 Channel packages that add their own tools reuse the same restriction: the package exports `ChannelsDoc`, `findBinding(state, { channel, address })`, and `conversationAddresses(state, conversationId)`, the helpers `channels.tools` itself uses. A tool reads the doc with `api.snapshot(ChannelsDoc, context)` and rejects addresses whose binding names another conversation.
 

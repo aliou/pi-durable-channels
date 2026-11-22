@@ -90,6 +90,10 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     message: InboundMessage,
     create: boolean,
   ): Promise<ConversationId | undefined> {
+    const canonical = {
+      channel: key.channel,
+      address: message.conversationAddress ?? key.address,
+    };
     const factory = create
       ? setup.registration(key.channel).conversation
       : undefined;
@@ -97,6 +101,14 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
       const state = await tx.doc(ChannelsDoc);
       const existing = findBinding(state, key);
       if (existing !== undefined) return existing.conversationId;
+      const bound = findBinding(state, canonical);
+      if (bound !== undefined) {
+        setBinding(state, key, {
+          conversationId: bound.conversationId,
+          via: canonical.address,
+        });
+        return bound.conversationId;
+      }
       const created = factory?.(message, { channel: key.channel });
       if (created === undefined) return undefined;
       const record = await tx.createConversation({
@@ -104,7 +116,12 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
       });
       await configure(tx, record.id, created.agent ?? {});
       await created.init?.(tx, record.id);
-      await bindAddress(tx, key, record.id);
+      await bindAddress(tx, canonical, record.id);
+      if (key.address !== canonical.address)
+        setBinding(state, key, {
+          conversationId: record.id,
+          via: canonical.address,
+        });
       return record.id;
     }, context);
   }
@@ -113,13 +130,8 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
     key: AddressKey,
     message: InboundMessage,
     options: Required<DeliverOptions>,
+    conversationId: ConversationId,
   ): Promise<DeliveryReceipt | undefined> {
-    const create = options.run && options.create;
-    const conversationId = await conversationFor(key, message, create);
-    if (conversationId === undefined) {
-      setup.report({ kind: "ignored", ...key });
-      return undefined;
-    }
     const conversation = await harness.conversation(conversationId, context);
     if (conversation === undefined)
       throw new Error(`Conversation ${conversationId} not found`);
@@ -141,16 +153,21 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
       if (known !== undefined)
         return { submissionId: known.id, duplicate: true };
       const state = await tx.doc(ChannelsDoc);
-      const stored = findBinding(state, key)?.addressData;
-      if (message.addressData !== undefined) {
+      const stored = findBinding(state, key);
+      if (message.addressData !== undefined || message.cursor !== undefined) {
+        const addressData = message.addressData ?? stored?.addressData;
+        const cursor = message.cursor ?? stored?.cursor;
         setBinding(state, key, {
           conversationId,
-          addressData: message.addressData,
+          ...(addressData === undefined ? {} : { addressData }),
+          ...(stored?.via === undefined ? {} : { via: stored.via }),
+          ...(cursor === undefined ? {} : { cursor }),
         });
       }
+      const storedData = stored?.addressData;
       const addressData =
         message.addressData ??
-        (stored === undefined ? undefined : copyJson(stored));
+        (storedData === undefined ? undefined : copyJson(storedData));
       const data = messageData(key, message, addressData);
       const draft = submission(message.requestId, content, data, options);
       const submissionId = await conversation.submit(tx, draft);
@@ -163,12 +180,23 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
   const deliver: ChannelsHub["deliver"] = async (channel, message, options) => {
     setup.registration(channel);
     const key = { channel, address: message.address };
+    const canonical = {
+      channel,
+      address: message.conversationAddress ?? message.address,
+    };
     const resolved = {
       whenBusy: options?.whenBusy ?? setup.options.whenBusy ?? "queue",
       run: options?.run ?? true,
       create: options?.create ?? true,
     };
-    return serial(key, () => admit(key, message, resolved));
+    const conversationId = await serial(canonical, () =>
+      conversationFor(key, message, resolved.run && resolved.create),
+    );
+    if (conversationId === undefined) {
+      setup.report({ kind: "ignored", ...key });
+      return undefined;
+    }
+    return serial(key, () => admit(key, message, resolved, conversationId));
   };
 
   function start(): Promise<void> {
@@ -188,6 +216,10 @@ export function createHub(harness: Harness, setup: HubSetup): ChannelsHub {
         adapter.start?.({
           deliver: (message, options) => deliver(channel, message, options),
           cancel: (address) => cancelAt({ channel, address }),
+          binding: async (address) => {
+            const state = await harness.snapshot(ChannelsDoc, context);
+            return findBinding(state, { channel, address });
+          },
           report: (report) => setup.report({ ...report, channel }),
           signal,
         }),

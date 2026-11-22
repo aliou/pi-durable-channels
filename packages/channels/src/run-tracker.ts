@@ -6,7 +6,7 @@ import type {
   LiveState,
 } from "@earendil-works/pi-durable";
 import { ChannelMessage } from "./doc";
-import { replyKey, runEntries } from "./hook";
+import { latestMessageIds, replyKey, runEntries } from "./hook";
 import type { Reporter } from "./report";
 import { eventsOf } from "./run-events";
 import type { AdapterLookup } from "./send";
@@ -60,7 +60,10 @@ async function recipientsOf(
   adapterFor: AdapterLookup,
 ): Promise<Recipient[]> {
   const entries = await runEntries(conversation, { first }, context);
-  return entries.filter(ChannelMessage.is).flatMap(({ id, data }) => {
+  const messages = entries.filter(ChannelMessage.is);
+  const latest = latestMessageIds(messages);
+  return messages.flatMap(({ id, data }) => {
+    if (!latest.has(id)) return [];
     const adapter = adapterFor(data.channel);
     if (adapter?.events === undefined) return [];
     const { channel, author: _author, ...target } = data;

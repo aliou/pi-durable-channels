@@ -87,7 +87,13 @@ export function createChannels(options: ChannelsOptions): Channels {
       tasks: [Send],
       hooks: [hook(GenerationTask, { afterRun: replyHook(Send) })],
     }),
-    tools: defineChannelTools(send),
+    tools: defineChannelTools(
+      send,
+      adapterFor,
+      Object.values(options.channels).some(
+        ({ adapter }) => adapter.history !== undefined,
+      ),
+    ),
     bind: async (tx, target, conversationId) => {
       registration(target.channel);
       await bindAddress(tx, target, conversationId);

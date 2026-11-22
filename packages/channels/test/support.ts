@@ -250,6 +250,8 @@ export function inbound(
   requestId: string,
   extra: {
     address?: string;
+    conversationAddress?: string;
+    cursor?: string;
     replyContext?: JsonValue;
     addressData?: JsonValue;
   } = {},

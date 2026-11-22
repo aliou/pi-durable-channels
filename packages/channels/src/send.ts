@@ -65,12 +65,19 @@ async function recordResult(
     ...(addressData === undefined
       ? {}
       : { addressData: copyJson(addressData) }),
+    ...(current.via === undefined ? {} : { via: current.via }),
+    ...(current.cursor === undefined ? {} : { cursor: current.cursor }),
   });
   setBinding(state, input, binding());
   if (result.alias === undefined) return;
   const alias = { channel: input.channel, address: result.alias };
   if (findBinding(state, alias) === undefined)
-    setBinding(state, alias, binding());
+    setBinding(state, alias, {
+      conversationId,
+      ...(addressData === undefined
+        ? {}
+        : { addressData: copyJson(addressData) }),
+    });
 }
 
 export function defineSendTask(

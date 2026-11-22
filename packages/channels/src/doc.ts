@@ -10,6 +10,8 @@ import type { AddressKey } from "./types";
 export type Binding = {
   conversationId: ConversationId;
   addressData?: JsonValue;
+  via?: string;
+  cursor?: string;
 };
 
 type Bindings = Record<string, Record<string, Binding>>;
@@ -68,6 +70,18 @@ export function conversationAddresses(
 ): AddressKey[] {
   return entriesOf(state)
     .filter(({ binding }) => binding.conversationId === conversationId)
+    .map(({ channel, address }) => ({ channel, address }));
+}
+
+export function canonicalConversationAddresses(
+  state: Readonly<ChannelsState> | undefined,
+  conversationId: ConversationId,
+): AddressKey[] {
+  return entriesOf(state)
+    .filter(
+      ({ binding }) =>
+        binding.conversationId === conversationId && binding.via === undefined,
+    )
     .map(({ channel, address }) => ({ channel, address }));
 }
 

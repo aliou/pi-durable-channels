@@ -26,9 +26,11 @@ import type {
   AdapterStart,
   ChannelAdapter,
   ChannelEvent,
+  ChannelHistoryRequest,
   OutboundPart,
   ReplyTarget,
 } from "../src";
+import { ChannelsDoc, findBinding } from "../src";
 import { defineSendTask } from "../src/send";
 import {
   accepted,
@@ -202,11 +204,17 @@ describe("delivery", () => {
       }),
     });
     const { harness, hub } = await test.open(new MemoryStorage());
-    await expect(hub.deliver("web", inbound("hello", "evt-1"))).rejects.toThrow(
-      "init failed",
-    );
+    await expect(
+      hub.deliver("web", {
+        ...inbound("hello", "evt-1", { cursor: "cursor-1" }),
+        conversationAddress: "canonical",
+      }),
+    ).rejects.toThrow("init failed");
     await expect(
       hub.conversationOf({ channel: "web", address: "thread-1" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      hub.conversationOf({ channel: "web", address: "canonical" }),
     ).resolves.toBeUndefined();
     const conversations = await harness.commit(
       (tx) => tx.scanConversations({}, 10),
@@ -398,6 +406,228 @@ describe("delivery", () => {
     await harness.close(context);
   });
 
+  it("joins an unbound alias to its conversation address without creating a conversation", async () => {
+    const test = setup();
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    const canonical = await deliver(
+      inbound("canonical", "evt-1", {
+        addressData: { source: "canonical" },
+        cursor: "canonical-cursor",
+      }),
+    );
+    const alias = await deliver(
+      inbound("alias", "evt-2", {
+        address: "alias-1",
+        conversationAddress: "thread-1",
+        addressData: { source: "alias" },
+        cursor: "alias-cursor",
+      }),
+      { create: false },
+    );
+    await harness.waitForIdle(context);
+
+    expect(alias.conversationId).toBe(canonical.conversationId);
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(findBinding(state, { channel: "web", address: "thread-1" })).toEqual(
+      {
+        conversationId: canonical.conversationId,
+        addressData: { source: "canonical" },
+        cursor: "canonical-cursor",
+      },
+    );
+    expect(findBinding(state, { channel: "web", address: "alias-1" })).toEqual({
+      conversationId: canonical.conversationId,
+      addressData: { source: "alias" },
+      via: "thread-1",
+      cursor: "alias-cursor",
+    });
+    expect(test.adapter.sent.map(({ message }) => message.address)).toEqual([
+      "thread-1",
+      "alias-1",
+    ]);
+    await harness.close(context);
+  });
+
+  it("creates one conversation for concurrent aliases of one new canonical address", async () => {
+    let created = 0;
+    const test = setup({
+      conversation: () => {
+        created++;
+        return createWeb();
+      },
+    });
+    const { harness, hub } = await test.open(new MemoryStorage());
+    const delivery = (address: string, requestId: string) =>
+      accepted(
+        hub.deliver("web", {
+          ...inbound(address, requestId, { address }),
+          conversationAddress: "canonical",
+          addressData: { address },
+          cursor: `cursor-${address}`,
+        }),
+      );
+    const [first, second] = await Promise.all([
+      delivery("alias-1", "evt-1"),
+      delivery("alias-2", "evt-2"),
+    ]);
+    await harness.waitForIdle(context);
+
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(created).toBe(1);
+    await expect(hub.addresses(first.conversationId)).resolves.toEqual([
+      { channel: "web", address: "canonical" },
+      { channel: "web", address: "alias-1" },
+      { channel: "web", address: "alias-2" },
+    ]);
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(
+      findBinding(state, { channel: "web", address: "canonical" }),
+    ).toEqual({ conversationId: first.conversationId });
+    expect(findBinding(state, { channel: "web", address: "alias-1" })).toEqual({
+      conversationId: first.conversationId,
+      via: "canonical",
+      addressData: { address: "alias-1" },
+      cursor: "cursor-alias-1",
+    });
+    const conversation = await conversationOf(harness, first.conversationId);
+    const view = await conversation.context(context);
+    const prompt = JSON.stringify(
+      view.messages.find(({ role }) => role === "system"),
+    );
+    expect(prompt).toContain("web: canonical");
+    expect(prompt).not.toContain("web: alias-1");
+    expect(prompt).not.toContain("web: alias-2");
+    await harness.close(context);
+  });
+
+  it("prefers an exact binding over another conversation address", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(inbound("one", "evt-1"));
+    const other = await deliver(
+      inbound("two", "evt-2", { address: "thread-2" }),
+    );
+    const exact = await deliver(
+      inbound("three", "evt-3", { conversationAddress: "thread-2" }),
+      { create: false },
+    );
+    await expect(
+      hub.deliver(
+        "web",
+        {
+          ...inbound("ignored", "evt-4", { address: "unknown" }),
+          conversationAddress: "missing",
+        },
+        { create: false },
+      ),
+    ).resolves.toBeUndefined();
+    await harness.waitForIdle(context);
+
+    expect(exact.conversationId).toBe(first.conversationId);
+    expect(exact.conversationId).not.toBe(other.conversationId);
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(
+      findBinding(state, { channel: "web", address: "thread-1" })?.via,
+    ).toBeUndefined();
+    await harness.close(context);
+  });
+
+  it("serializes first deliveries to one address across different conversation addresses", async () => {
+    const downloading = gate();
+    const downloaded = gate();
+    const test = setup();
+    test.adapter.fetchFile = async (url) => {
+      if (url === "slow") {
+        downloading.open();
+        await downloaded.promise;
+      }
+      return new TextEncoder().encode("notes");
+    };
+    const { harness, hub } = await test.open(new MemoryStorage());
+    const first = hub.deliver("web", {
+      ...inbound("slow", "evt-2", {
+        conversationAddress: "fallback-a",
+        cursor: "cursor-slow",
+      }),
+      files: [{ name: "notes.txt", mimeType: "text/plain", url: "slow" }],
+    });
+    await downloading.promise;
+    let secondAdmitted = false;
+    const second = hub
+      .deliver(
+        "web",
+        inbound("fast", "evt-3", {
+          conversationAddress: "fallback-b",
+          cursor: "cursor-fast",
+        }),
+      )
+      .then((receipt) => {
+        secondAdmitted = true;
+        return receipt;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondAdmitted).toBe(false);
+
+    downloaded.open();
+    const [slow, fast] = await Promise.all([first, second]);
+    await harness.waitForIdle(context);
+    expect(fast?.conversationId).toBe(slow?.conversationId);
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(
+      findBinding(state, { channel: "web", address: "thread-1" })?.cursor,
+    ).toBe("cursor-fast");
+    await harness.close(context);
+  });
+
+  it("advances cursors only for new admissions and preserves them in binding updates", async () => {
+    const test = setup();
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const first = await deliver(
+      inbound("one", "evt-1", {
+        conversationAddress: "canonical",
+        addressData: { version: 1 },
+        cursor: "cursor-1",
+      }),
+    );
+    const duplicate = await deliver(
+      inbound("one", "evt-1", {
+        conversationAddress: "canonical",
+        addressData: { version: 2 },
+        cursor: "cursor-2",
+      }),
+    );
+    await deliver(
+      inbound("two", "evt-2", {
+        conversationAddress: "canonical",
+        addressData: { version: 3 },
+      }),
+    );
+    expect(duplicate).toEqual(first);
+    await hub.bind(
+      { channel: "web", address: "thread-1", addressData: { version: 4 } },
+      first.conversationId,
+    );
+    test.adapter.result = () => ({ addressData: { version: 5 } });
+    await deliver(
+      inbound("three", "evt-3", {
+        conversationAddress: "canonical",
+        cursor: "cursor-3",
+      }),
+    );
+    await harness.waitForIdle(context);
+
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(findBinding(state, { channel: "web", address: "thread-1" })).toEqual(
+      {
+        conversationId: first.conversationId,
+        addressData: { version: 5 },
+        via: "canonical",
+        cursor: "cursor-3",
+      },
+    );
+    await harness.close(context);
+  });
+
   it("rejects a delivery for an unknown channel", async () => {
     const test = setup();
     const { harness, hub } = await test.open(new MemoryStorage());
@@ -450,15 +680,32 @@ describe("busy conversations", () => {
   });
 
   it("steers the current run when the delivery asks for it", async () => {
-    const { harness, deliver, test, held } = await busySetup();
-    await deliver(inbound("also this", "evt-2"), {
+    const { harness, hub, deliver, test, held, first } = await busySetup();
+    const second = await deliver(inbound("also this", "evt-2"), {
       whenBusy: "steer",
     });
     held.gate?.open();
     await harness.waitForIdle(context);
     expect(
       test.adapter.sent.map(({ message }) => message.parts[0]?.text),
-    ).toEqual(["answer to also this", "answer to also this"]);
+    ).toEqual([undefined, "answer to also this"]);
+    expect(test.adapter.sent.map(({ message }) => message.parts)).toEqual([
+      [],
+      [{ type: "text", text: "answer to also this" }],
+    ]);
+    expect(test.adapter.sent.map(({ ctx }) => ctx.idempotencyKey)).toEqual([
+      expect.stringMatching(/^reply:/),
+      expect.stringMatching(/^reply:/),
+    ]);
+    expect(test.adapter.sent[0]?.ctx.idempotencyKey).not.toBe(
+      test.adapter.sent[1]?.ctx.idempotencyKey,
+    );
+    await expect(hub.status(first.submissionId)).resolves.toEqual({
+      state: "done",
+    });
+    await expect(hub.status(second.submissionId)).resolves.toEqual({
+      state: "done",
+    });
     await harness.close(context);
   });
 
@@ -468,9 +715,31 @@ describe("busy conversations", () => {
     held.gate?.open();
     await harness.waitForIdle(context);
     expect(test.adapter.sent).toHaveLength(2);
+    expect(test.adapter.sent.map(({ message }) => message.parts)).toEqual([
+      [],
+      [{ type: "text", text: "answer to also this" }],
+    ]);
+    await harness.close(context);
+  });
+
+  it("answers once at each address sharing a steered run", async () => {
+    const { harness, hub, deliver, test, held, first } = await busySetup();
+    await hub.bind(
+      { channel: "web", address: "thread-2" },
+      first.conversationId,
+    );
+    await deliver(inbound("second address", "evt-2", { address: "thread-2" }), {
+      whenBusy: "steer",
+    });
+    held.gate?.open();
+    await harness.waitForIdle(context);
+
     expect(
-      new Set(test.adapter.sent.map(({ message }) => message.parts[0]?.text)),
-    ).toEqual(new Set(["answer to also this"]));
+      test.adapter.sent.map(({ message }) => [message.address, message.parts]),
+    ).toEqual([
+      ["thread-1", [{ type: "text", text: "answer to second address" }]],
+      ["thread-2", [{ type: "text", text: "answer to second address" }]],
+    ]);
     await harness.close(context);
   });
 });
@@ -890,6 +1159,173 @@ describe("tools", () => {
     ]);
     await harness.close(context);
   });
+
+  it("registers read_history only when an adapter supports it", () => {
+    expect(setup().channels.tools.tools?.map(({ name }) => name)).not.toContain(
+      "read_history",
+    );
+    const adapter = testAdapter();
+    adapter.history = async () => ({ content: "", truncated: false });
+    const test = setup({ channels: { web: { adapter } } });
+    expect(test.channels.tools.tools?.map(({ name }) => name)).toContain(
+      "read_history",
+    );
+  });
+
+  it("reads history through an owned alias without changing admission state", async () => {
+    const adapter = testAdapter();
+    const requests: ChannelHistoryRequest[] = [];
+    let signal: AbortSignal | undefined;
+    adapter.history = async (request, ctx) => {
+      requests.push(request);
+      signal = ctx.signal;
+      return { content: "earlier messages", cursor: "next", truncated: false };
+    };
+    const test = setup({
+      channels: { web: { adapter, conversation: createWeb } },
+      respond: callTool("read_history", {
+        channel: "web",
+        address: "alias-1",
+        after: "opaque-after",
+        before: "opaque-before",
+      }),
+    });
+    const storage = new MemoryStorage();
+    const { harness, deliver } = await test.open(storage);
+    await deliver(
+      inbound("hello", "evt-1", {
+        address: "alias-1",
+        conversationAddress: "canonical",
+        cursor: "admission-cursor",
+      }),
+    );
+    await harness.waitForIdle(context);
+    await deliver(
+      inbound("call", "evt-2", {
+        address: "alias-1",
+        conversationAddress: "canonical",
+      }),
+      { create: false },
+    );
+    await harness.waitForIdle(context);
+
+    expect(requests).toEqual([
+      {
+        address: "alias-1",
+        after: "opaque-after",
+        before: "opaque-before",
+        maxBytes: 32768,
+      },
+    ]);
+    expect(signal).toBeInstanceOf(AbortSignal);
+    const reply = adapter.sent.at(-1)?.message.parts[0]?.text ?? "";
+    expect(JSON.parse(reply.replace(/^done: /, ""))).toEqual({
+      content: "earlier messages",
+      cursor: "next",
+      truncated: false,
+    });
+    const state = await harness.snapshot(ChannelsDoc, context);
+    expect(
+      findBinding(state, { channel: "web", address: "alias-1" })?.cursor,
+    ).toBe("admission-cursor");
+    const submissions = await storage.scanSubmissions(
+      {},
+      10,
+      undefined,
+      context,
+    );
+    expect(submissions.items).toHaveLength(2);
+    await harness.close(context);
+  });
+
+  it("bounds history content without splitting UTF-8 and keeps the continuation cursor", async () => {
+    const adapter = testAdapter();
+    const content = `${"a".repeat(32767)}\u{1f600}tail`;
+    adapter.history = async () => ({
+      content,
+      cursor: "continue",
+      truncated: false,
+    });
+    const test = setup({
+      channels: { web: { adapter, conversation: createWeb } },
+      respond: callTool("read_history", {
+        channel: "web",
+        address: "thread-1",
+      }),
+    });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    await deliver(inbound("call", "evt-1"));
+    await harness.waitForIdle(context);
+
+    const reply = adapter.sent.at(-1)?.message.parts[0]?.text ?? "";
+    const result = JSON.parse(reply.replace(/^done: /, "")) as {
+      content: string;
+      cursor: string;
+      truncated: boolean;
+    };
+    expect(result).toEqual({
+      content: "a".repeat(32767),
+      cursor: "continue",
+      truncated: true,
+    });
+    expect(new TextEncoder().encode(result.content)).toHaveLength(32767);
+    await harness.close(context);
+  });
+
+  it("rejects history for another conversation and for an adapter without history", async () => {
+    const adapter = testAdapter();
+    adapter.history = async () => ({ content: "secret", truncated: false });
+    const quiet = testAdapter();
+    const test = setup({
+      channels: {
+        web: { adapter, conversation: createWeb },
+        chat: { adapter: quiet },
+      },
+    });
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    const own = await deliver(inbound("own", "evt-1"));
+    await deliver(inbound("other", "evt-2", { address: "other" }));
+    await hub.bind({ channel: "chat", address: "chat-1" }, own.conversationId);
+    await harness.waitForIdle(context);
+
+    for (const [channel, address] of [
+      ["web", "other"],
+      ["chat", "chat-1"],
+    ]) {
+      test.state.respond = callTool("read_history", { channel, address });
+      await deliver(inbound("call", `evt-${channel}`));
+      await harness.waitForIdle(context);
+    }
+    const replies = adapter.sent
+      .slice(-2)
+      .map(({ message }) => message.parts[0]?.text);
+    expect(replies).toEqual([
+      "done: Unknown address other on channel web.",
+      "done: History is unavailable on channel chat.",
+    ]);
+    await harness.close(context);
+  });
+
+  it("returns adapter history failures as tool errors", async () => {
+    const adapter = testAdapter();
+    adapter.history = async () => {
+      throw new Error("source denied");
+    };
+    const test = setup({
+      channels: { web: { adapter, conversation: createWeb } },
+      respond: callTool("read_history", {
+        channel: "web",
+        address: "thread-1",
+      }),
+    });
+    const { harness, deliver } = await test.open(new MemoryStorage());
+    await deliver(inbound("call", "evt-1"));
+    await harness.waitForIdle(context);
+    expect(adapter.sent.at(-1)?.message.parts[0]?.text).toBe(
+      "done: History read failed: source denied",
+    );
+    await harness.close(context);
+  });
 });
 
 describe("binding", () => {
@@ -1082,6 +1518,9 @@ describe("adapters", () => {
     expect(adapter.sent.map(({ message }) => message.parts[0]?.text)).toEqual([
       "echo hello",
     ]);
+    await expect(started.binding?.("thread-1")).resolves.toEqual({
+      conversationId: receipt?.conversationId,
+    });
     expect(started.signal?.aborted).toBe(false);
     await hub.stop();
     expect(started.signal?.aborted).toBe(true);
@@ -1659,6 +2098,64 @@ describe("events", () => {
         }),
       ]),
     );
+    await harness.close(context);
+  });
+
+  it("moves run events to the newest input at each address", async () => {
+    const held: { gate?: Gate } = { gate: gate() };
+    const test = setup({
+      extensions: [holdTool(held)],
+      respond: toolThenAnswer(
+        fauxAssistantMessage(fauxToolCall("work", {}), {
+          stopReason: "toolUse",
+        }),
+        "done",
+      ),
+    });
+    const { seen } = withEvents(test);
+    const { harness, hub, deliver } = await test.open(new MemoryStorage());
+    await hub.start();
+    await deliver(inbound("start", "evt-1", { replyContext: { input: 1 } }));
+    await eventually(() =>
+      seen.some(({ event }) => event.type === "tool_started"),
+    );
+    await deliver(inbound("steered", "evt-2", { replyContext: { input: 2 } }), {
+      whenBusy: "steer",
+    });
+    held.gate?.open();
+    await eventually(() =>
+      seen.some(
+        ({ target, event }) =>
+          event.type === "run_started" &&
+          JSON.stringify(target.replyContext) === JSON.stringify({ input: 2 }),
+      ),
+    );
+    await harness.waitForIdle(context);
+    await eventually(ended(seen));
+
+    const starts = seen.filter(({ event }) => event.type === "run_started");
+    expect(starts.map(({ target }) => target.replyContext)).toEqual([
+      { input: 1 },
+      { input: 2 },
+    ]);
+    const secondStart = seen.findIndex(
+      ({ target, event }) =>
+        event.type === "run_started" &&
+        JSON.stringify(target.replyContext) === JSON.stringify({ input: 2 }),
+    );
+    expect(
+      seen
+        .slice(secondStart)
+        .every(
+          ({ target }) =>
+            JSON.stringify(target.replyContext) ===
+            JSON.stringify({ input: 2 }),
+        ),
+    ).toBe(true);
+    expect(test.adapter.sent.map(({ message }) => message.parts)).toEqual([
+      [],
+      [{ type: "text", text: "done" }],
+    ]);
     await harness.close(context);
   });
 
