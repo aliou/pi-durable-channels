@@ -1,5 +1,16 @@
 # @aliou/pi-durable-channels-slack
 
+## 0.4.0
+
+### Minor Changes
+
+- c3fa724: Add live Slack conversation configuration, shared conversation routing, bounded history, per-thread reply routing, and actionable setup diagnostics.
+
+### Patch Changes
+
+- Updated dependencies [05b4e8f]
+  - @aliou/pi-durable-channels@0.4.0
+
 ## 0.1.0
 
 ### Minor Changes

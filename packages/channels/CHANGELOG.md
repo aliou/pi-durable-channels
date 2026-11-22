@@ -1,5 +1,11 @@
 # @aliou/pi-durable-channels
 
+## 0.4.0
+
+### Minor Changes
+
+- 05b4e8f: Route aliases into shared conversations, persist admission cursors, coalesce replies and run events per address, and add authorized bounded source-history reads.
+
 ## 0.3.0
 
 ### Minor Changes
