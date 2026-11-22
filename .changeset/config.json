@@ -2,9 +2,21 @@
   "$schema": "https://unpkg.com/@changesets/config@4.0.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [["@aliou/pi-durable-channels", "@aliou/pi-durable-channels-slack"]],
   "linked": [],
+  "ignore": [
+    "@examples/github-channel",
+    "@examples/webhook-channel",
+    "@examples/generic-webhook-agent",
+    "@examples/shared",
+    "@examples/software-factory",
+    "@examples/stripe-churn-responder"
+  ],
   "access": "public",
   "baseBranch": "main",
-  "updateInternalDependencies": "patch"
+  "updateInternalDependencies": "patch",
+  "privatePackages": {
+    "version": true,
+    "tag": false
+  }
 }
